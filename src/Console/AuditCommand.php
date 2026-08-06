@@ -4,6 +4,7 @@ namespace Rushing\Surgeon\Console;
 
 use Illuminate\Console\Command;
 use Rushing\Doctor\DoctorStatus;
+use Rushing\Surgeon\Conformance\BuiltInAudits;
 use Rushing\Surgeon\Operation\ConformanceAuditResult;
 use Rushing\Surgeon\Operation\ConformanceManifest;
 use Rushing\Surgeon\Operation\ConformanceReport;
@@ -16,8 +17,12 @@ use Rushing\Surgeon\Operation\ConformanceSweep;
  * It is the fix-half read of the doctor manifest that matches the destination sentence. It:
  *  1. reuses doctor's merged manifest ({@see ConformanceManifest} — the host binds the adapter) as the
  *     discovery substrate (decision 5), scoped by the running host context (decision 6 — no tier gate);
- *  2. dedupes registrations by audit class-string and runs each audit ({@see ConformanceSweep});
- *  3. collects `Finding`s + paired `OperationSuggestion`s and reports the fixable subset.
+ *  2. runs surgeon's OWN built-in audits ({@see BuiltInAudits} — b1 promotion-candidate + b2
+ *     stale-downstream-duplicate, ticket 15) ALONGSIDE the host registrations, scoped to the running
+ *     host's app root (`base_path()`) — they're surgeon-native, so they ride a parallel channel, not the
+ *     host's manifest;
+ *  3. dedupes registrations by audit class-string and runs each audit ({@see ConformanceSweep});
+ *  4. collects `Finding`s + paired `OperationSuggestion`s and reports the fixable subset.
  *
  * The **agent-nomination footer** (decision 7): one line by default (fixable count + the `surgeon:*`
  * command family); the full `OperationSuggestion` surface behind `-v`; a repeated deterministic shape
@@ -35,7 +40,8 @@ class AuditCommand extends Command
 
     public function handle(ConformanceManifest $manifest): int
     {
-        $report = (new ConformanceSweep(fn (string $audit) => $this->laravel->make($audit)))->run($manifest);
+        $builtIn = (new BuiltInAudits($this->laravel->basePath()))->audits();
+        $report = (new ConformanceSweep(fn (string $audit) => $this->laravel->make($audit)))->run($manifest, $builtIn);
 
         if ($this->option('json')) {
             $this->line((string) json_encode($report->toArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));

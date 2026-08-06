@@ -17,10 +17,13 @@ it('registers surgeon:audit as the conformance sweep', function () {
     expect(array_key_exists('surgeon:audit', app(Kernel::class)->all()))->toBeTrue();
 });
 
-it('reports cleanly when no conformance audits are registered (Null default)', function () {
-    // No bindManifest() call → the SurgeonServiceProvider's NullConformanceManifest default is in force.
+it('reports surgeon\'s own built-in audits even when no HOST manifest is registered (Null default)', function () {
+    // No bindManifest() call → the NullConformanceManifest default is in force, so the host contributes
+    // NOTHING. But ticket 15's built-in audits (b1/b2) always run — the sweep is never empty now. The
+    // testbench base_path() has no app/Data, so both built-ins emit their no-scope Pass and count as 2.
     $this->artisan('surgeon:audit')
-        ->expectsOutputToContain('No conformance audits registered')
+        ->expectsOutputToContain('UpstreamDtoAudit')
+        ->expectsOutputToContain('StaleDownstreamDuplicateAudit')
         ->assertExitCode(0);
 });
 
@@ -56,9 +59,10 @@ it('dedupes the same audit registered by many packages', function () {
         new DoctorRegistration('tower', PlainAudit::class),
     ]);
 
-    // 2 distinct audits after dedupe (SuggestingAudit once + PlainAudit).
+    // 2 distinct HOST audits after dedupe (SuggestingAudit once + PlainAudit), plus surgeon's 2 built-in
+    // audits (b1/b2, ticket 15) which always run alongside — 4 in total.
     $this->artisan('surgeon:audit')
-        ->expectsOutputToContain('(2 audit(s))')
+        ->expectsOutputToContain('(4 audit(s))')
         ->assertExitCode(0);
 });
 

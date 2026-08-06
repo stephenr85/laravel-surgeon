@@ -3,6 +3,7 @@
 namespace Rushing\Surgeon\Operation;
 
 use Rushing\Doctor\DoctorAudit;
+use Rushing\Surgeon\Conformance\BuiltInAudits;
 
 /**
  * The conformance-driven audit path (ticket 07, decision 5) — the engine behind `surgeon:audit`. It
@@ -18,6 +19,13 @@ use Rushing\Doctor\DoctorAudit;
  *    null suggestion. An audit implementing both prefers the richer paired channel (which already carries
  *    its findings) — never double-counted.
  *
+ * **Two inputs, one report (ticket 15).** Beyond the host-manifest registrations, the sweep also runs
+ * surgeon's OWN built-in audits ({@see BuiltInAudits} — b1/b2), passed as a
+ * plain list of {@see SuggestsOperations} instances. They are surgeon-native (generic package-graph
+ * hygiene, not a host concept), so they don't belong in the host's doctor manifest; they ride this
+ * parallel channel, always present, scoped to the running host's app root. Built-ins are reported first
+ * (their class-string joins the dedupe set, so a host that also registered one wouldn't double-run it).
+ *
  * The engine resolves audit class-strings through an injected resolver (the container `make`), so it stays
  * container-agnostic and unit-testable.
  */
@@ -28,10 +36,31 @@ class ConformanceSweep
         private $resolver,
     ) {}
 
-    public function run(ConformanceManifest $manifest): ConformanceReport
+    /**
+     * @param  list<SuggestsOperations>  $builtIn  surgeon's own built-in audits (ticket 15), run alongside
+     *                                             the host-manifest registrations and reported first
+     */
+    public function run(ConformanceManifest $manifest, array $builtIn = []): ConformanceReport
     {
         $seen = [];
         $results = [];
+
+        // Surgeon's OWN audits first (ticket 15) — a parallel, always-present channel scoped to the host.
+        // Their class-string joins the dedupe set so a host that also registered one won't double-run it.
+        foreach ($builtIn as $audit) {
+            $class = $audit::class;
+            if (isset($seen[$class])) {
+                continue;
+            }
+            $seen[$class] = true;
+
+            $results[] = new ConformanceAuditResult(
+                'rushing/laravel-surgeon',
+                $class,
+                false, // advisory, not a gate — a promotion/duplicate nomination never reddens the exit code
+                $this->collect($audit),
+            );
+        }
 
         foreach ($manifest->registrations() as $registration) {
             if (isset($seen[$registration->audit])) {
