@@ -1,32 +1,22 @@
 <?php
 
-use Rushing\Surgeon\Audit\PackageGraph;
 use Rushing\Surgeon\Docblock\DocblockDerefOperation;
-use Rushing\Surgeon\Docblock\DocblockTierAudit;
 use Rushing\Surgeon\Rewrite\SpliceApplier;
 
 /**
- * Stand up a two-package tree: a lower-tier `acme/beam` (`Acme\Beam\ => src/`) that depends on nothing,
- * and a higher-tier `acme/app` (`App\ => app/`) that requires beam. A beam file carries a docblock
- * a docblock `@see` to an app-tier provider — an UPWARD reference (beam does not reach app).
- * Returns [root, beamFile].
+ * The generic deref MECHANISM (`DocblockDerefOperation`) — the byte-splice writer that de-forges an
+ * upward-import footgun. It stays foundation-tier in surgeon; the POLICY that DECIDES which references
+ * are upward (the tier-audit) moved DOWN to beam, so this test exercises the operation directly over a
+ * hand-built splice payload — no tier-audit involved.
+ *
+ * Stand up a lower-tier `acme/beam` file whose docblock carries an importable `@see` to an app-tier FQN,
+ * then apply the deref and assert the exact output. Returns [root, beamFile].
  *
  * @return array{0:string, 1:string}
  */
 function docblock_fixture(string $see): array
 {
     $root = surgeon_tmp('docblock');
-
-    surgeon_write($root.'/beam/composer.json', json_encode([
-        'name' => 'acme/beam',
-        'autoload' => ['psr-4' => ['Acme\\Beam\\' => 'src/']],
-    ], JSON_PRETTY_PRINT));
-
-    surgeon_write($root.'/app/composer.json', json_encode([
-        'name' => 'acme/app',
-        'require' => ['acme/beam' => '*'],
-        'autoload' => ['psr-4' => ['App\\' => 'app/']],
-    ], JSON_PRETTY_PRINT));
 
     $beamFile = $root.'/beam/src/Particle.php';
     surgeon_write($beamFile, <<<PHP
@@ -46,21 +36,41 @@ function docblock_fixture(string $see): array
     return [$root, $beamFile];
 }
 
+/**
+ * The splice payload the (beam-resident) tier-audit would emit for one upward `@see` reference — built
+ * here by hand so the surgeon test exercises only the operation, never the moved audit.
+ */
+function docblock_payload(string $file, string $old, string $new): array
+{
+    $code = (string) file_get_contents($file);
+    $start = strpos($code, $old);
+    $end = $start + strlen($old) - 1;
+
+    return [
+        'file' => $file,
+        'relativePath' => basename($file),
+        'line' => substr_count($code, "\n", 0, $start) + 1,
+        'span' => [$start, $end],
+        'old' => $old,
+        'new' => $new,
+    ];
+}
+
+it('derefText renders the class short-name in the exact backtick form', function () {
+    expect(DocblockDerefOperation::derefText('App\\Providers\\ParticleServiceProvider'))
+        ->toBe('`ParticleServiceProvider`');
+});
+
 it('rewrites an upward {@see \\Fqn} to the exact backtick short-name form', function () {
     [$root, $beamFile] = docblock_fixture('{@see \\App\\Providers\\ParticleServiceProvider}');
-    $graph = PackageGraph::fromRoots([$root.'/beam', $root.'/app']);
 
-    $findings = (new DocblockTierAudit([$beamFile], 'acme/beam', $graph))->suggestOperations();
+    $payload = docblock_payload(
+        $beamFile,
+        '{@see \\App\\Providers\\ParticleServiceProvider}',
+        '`ParticleServiceProvider`',
+    );
 
-    // The audit must place App\* as higher-tier and nominate the deref op with the exact splice payload.
-    expect($findings)->toHaveCount(1)
-        ->and($findings[0]->isFixable())->toBeTrue()
-        ->and($findings[0]->suggestion->kind)->toBe('docblock-deref')
-        ->and($findings[0]->suggestion->payload['old'])->toBe('{@see \\App\\Providers\\ParticleServiceProvider}')
-        ->and($findings[0]->suggestion->payload['new'])->toBe('`ParticleServiceProvider`');
-
-    // Apply the deterministic splice and assert the exact output.
-    $plan = (new DocblockDerefOperation)->plan([$findings[0]->suggestion->payload]);
+    $plan = (new DocblockDerefOperation)->plan([$payload]);
     (new DocblockDerefOperation)->apply($plan, new SpliceApplier);
 
     $expected = <<<'PHP'
@@ -84,43 +94,17 @@ it('rewrites an upward {@see \\Fqn} to the exact backtick short-name form', func
 
 it('also derefs the bare @see \\Fqn annotation form', function () {
     [$root, $beamFile] = docblock_fixture('@see \\App\\Providers\\ParticleServiceProvider');
-    $graph = PackageGraph::fromRoots([$root.'/beam', $root.'/app']);
 
-    $findings = (new DocblockTierAudit([$beamFile], 'acme/beam', $graph))->suggestOperations();
+    $payload = docblock_payload(
+        $beamFile,
+        '@see \\App\\Providers\\ParticleServiceProvider',
+        '`ParticleServiceProvider`',
+    );
 
-    expect($findings)->toHaveCount(1)
-        ->and($findings[0]->suggestion->payload['old'])->toBe('@see \\App\\Providers\\ParticleServiceProvider')
-        ->and($findings[0]->suggestion->payload['new'])->toBe('`ParticleServiceProvider`');
+    $plan = (new DocblockDerefOperation)->plan([$payload]);
+    (new DocblockDerefOperation)->apply($plan, new SpliceApplier);
 
-    surgeon_rrmdir($root);
-});
-
-it('does not flag a downward @see (owner already reaches the target package)', function () {
-    // app references beam — a legal downward @see. beam does NOT require app back.
-    $root = surgeon_tmp('docblock-down');
-    surgeon_write($root.'/beam/composer.json', json_encode([
-        'name' => 'acme/beam', 'autoload' => ['psr-4' => ['Acme\\Beam\\' => 'src/']],
-    ], JSON_PRETTY_PRINT));
-    surgeon_write($root.'/app/composer.json', json_encode([
-        'name' => 'acme/app', 'require' => ['acme/beam' => '*'], 'autoload' => ['psr-4' => ['App\\' => 'app/']],
-    ], JSON_PRETTY_PRINT));
-    $appFile = $root.'/app/app/Consumer.php';
-    surgeon_write($appFile, <<<'PHP'
-        <?php
-
-        namespace App;
-
-        /** Consumes {@see \Acme\Beam\Particle}. */
-        class Consumer
-        {
-        }
-
-        PHP);
-
-    $graph = PackageGraph::fromRoots([$root.'/beam', $root.'/app']);
-    $findings = (new DocblockTierAudit([$appFile], 'acme/app', $graph))->suggestOperations();
-
-    expect($findings)->toBe([]);
+    expect(file_get_contents($beamFile))->toContain('See `ParticleServiceProvider` for');
 
     surgeon_rrmdir($root);
 });
@@ -132,9 +116,13 @@ it('produces a form Pint\'s fully_qualified_strict_types provably will NOT impor
     }
 
     [$root, $beamFile] = docblock_fixture('{@see \\App\\Providers\\ParticleServiceProvider}');
-    $graph = PackageGraph::fromRoots([$root.'/beam', $root.'/app']);
-    $findings = (new DocblockTierAudit([$beamFile], 'acme/beam', $graph))->suggestOperations();
-    $plan = (new DocblockDerefOperation)->plan([$findings[0]->suggestion->payload]);
+
+    $payload = docblock_payload(
+        $beamFile,
+        '{@see \\App\\Providers\\ParticleServiceProvider}',
+        '`ParticleServiceProvider`',
+    );
+    $plan = (new DocblockDerefOperation)->plan([$payload]);
     (new DocblockDerefOperation)->apply($plan, new SpliceApplier);
 
     // Aggressive config: the exact fixer set that forges the import in the real footgun.

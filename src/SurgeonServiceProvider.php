@@ -7,8 +7,6 @@ use Laravel\Mcp\Facades\Mcp;
 use Rushing\McpRegistry\Bridge\ArtisanCommandReflector;
 use Rushing\Surgeon\Console\AuditCommand;
 use Rushing\Surgeon\Console\CanonicalizeCommand;
-use Rushing\Surgeon\Console\DocblockCommand;
-use Rushing\Surgeon\Console\HouseStyleCommand;
 use Rushing\Surgeon\Console\LintCommand;
 use Rushing\Surgeon\Console\MoveCommand;
 use Rushing\Surgeon\Console\OverlayCommand;
@@ -59,8 +57,6 @@ class SurgeonServiceProvider extends BaseServiceProvider
                 CanonicalizeCommand::class,
                 LintCommand::class,
                 RewriteCommand::class,
-                HouseStyleCommand::class,
-                DocblockCommand::class,
             ]);
         }
 

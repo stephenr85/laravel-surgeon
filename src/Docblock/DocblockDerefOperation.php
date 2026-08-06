@@ -39,8 +39,8 @@ use Rushing\Surgeon\Rewrite\TouchManifest;
  * byte-splice machinery verbatim — {@see PlannedEdit} spans + {@see SpliceApplier}'s descending-offset,
  * drift-refusing splice — and invents no rewriter of its own. It is generic: it operates on any docblock
  * reference span the audit hands it; the tier-awareness (is the FQN higher than the file's package?)
- * lives in {@see DocblockTierAudit} via `PackageGraph`, so this op stays foundation-tier with no
- * `App\*` / `Splicewire\*` / `Schemastud\*` literals.
+ * lives in the beam-tier `DocblockTierAudit` POLICY via `PackageGraph`, so this op stays foundation-tier
+ * with no `App\*` / `Splicewire\*` / `Schemastud\*` literals.
  */
 class DocblockDerefOperation implements Operation
 {
@@ -81,7 +81,7 @@ class DocblockDerefOperation implements Operation
 
     /**
      * Build the previewable splice plan from a set of resolved docblock references. Each ref is a
-     * `{file, relativePath, line, span:[start,end], old, new}` shape (as {@see DocblockTierAudit}
+     * `{file, relativePath, line, span:[start,end], old, new}` shape (as the beam-tier `DocblockTierAudit`
      * emits into its {@see OperationSuggestion} payloads). The `old` text is
      * the exact source at the span — the applier re-verifies it and refuses to splice on drift.
      *
