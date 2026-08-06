@@ -63,21 +63,34 @@ it('refuses without a --from resolved operation set (no inference)', function ()
         ->assertExitCode(Command::INVALID);
 });
 
-it('refuses to apply a basename rename and writes nothing', function () {
+it('applies a same-namespace class rename: declaration token, basename move, and short-name repoints', function () {
     $root = surgeon_psr4_root('cmd-rename');
 
     try {
+        // A same-namespace rename of the moved class itself: App\Old\Widget → App\Old\Gadget.
         $from = writeFindingSet($root, 'App\\Old\\Widget', 'App\\Old\\Gadget');
-        $before = file_get_contents($root.'/src/Consumer.php');
 
         $this->artisan('surgeon:move', [
             '--from' => $from,
             '--apply' => true,
             '--root' => [$root],
             '--no-composer' => true,
-        ])->assertExitCode(Command::FAILURE);
+        ])->assertExitCode(Command::SUCCESS);
 
-        expect(file_get_contents($root.'/src/Consumer.php'))->toBe($before);
+        // The declaration file moved basename (same dir) and its `class` token was rewritten.
+        expect(is_file($root.'/src/Old/Gadget.php'))->toBeTrue()
+            ->and(is_file($root.'/src/Old/Widget.php'))->toBeFalse();
+        $decl = file_get_contents($root.'/src/Old/Gadget.php');
+        expect($decl)->toContain('class Gadget')
+            ->and($decl)->not->toContain('class Widget')
+            ->and($decl)->toContain('namespace App\\Old;');
+
+        // The consumer's `use` line and its short-name usages all repointed to Gadget.
+        $consumer = file_get_contents($root.'/src/Consumer.php');
+        expect($consumer)->toContain('use App\\Old\\Gadget;')
+            ->and($consumer)->toContain('private Gadget $widget')
+            ->and($consumer)->toContain('return Gadget::class;')
+            ->and($consumer)->not->toContain('Widget');
     } finally {
         surgeon_rrmdir($root);
     }

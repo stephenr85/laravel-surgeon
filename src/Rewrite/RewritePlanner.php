@@ -2,6 +2,11 @@
 
 namespace Rushing\Surgeon\Rewrite;
 
+use PhpParser\Node;
+use PhpParser\NodeTraverser;
+use PhpParser\NodeVisitor\NameResolver;
+use PhpParser\NodeVisitorAbstract;
+use PhpParser\ParserFactory;
 use Rushing\Surgeon\Audit\AuditReport;
 use Rushing\Surgeon\Audit\Reference;
 use Rushing\Surgeon\Audit\ReferenceCategory;
@@ -45,34 +50,50 @@ class RewritePlanner
             throw new \InvalidArgumentException('surgeon:move needs a relocation audit (a --to destination); got an insight-only finding-set.');
         }
 
-        // A basename rename (Old\Widget → Old\Gadget) needs the class-declaration TOKEN rewritten as
-        // well — and that token is not a touch-point the ticket-05 audit surfaces (it records the
-        // moved file's `namespace` line, not its `class Name`). Applying only the FQN-reference edits
-        // would leave `class Widget` behind references to `Gadget` — broken code. Ticket 02 already
-        // rules the rename's non-FQN cascade Tier-3 advisory, so this Tier-1 pass declines the whole
-        // move rather than half-apply it. Pure relocation (basename preserved) is unaffected.
+        // A CLASS RENAME (Old\Widget → Old\Gadget — the short-name changes) needs three things a pure
+        // relocation does not: (a) the `class Widget` declaration TOKEN in the moved file rewritten to
+        // `class Gadget`; (b) a basename-only physical move (`Widget.php` → `Gadget.php`); and (c) the
+        // same-namespace short references (the declaring file's own internal refs and unimported siblings
+        // in the same namespace) repointed `Widget` → `Gadget` — refs a pure relocation correctly leaves
+        // alone or hands to the guided path. Ticket 02's guided-rename path: here made a real plan.
         //
-        // The check is per moved MEMBER — a moved symbol whose OWN declaration changes basename between
+        // Detection is per moved MEMBER — a moved symbol whose OWN declaration changes basename between
         // its matched and new FQN. Reading it off the declaration references (not the target's `value`)
         // is what makes it correct for a namespace / atomic-cluster move too: those targets carry a
         // *prefix* in `value` (`App\Cluster` → `Dest`), never a basename, so comparing the target
         // strings would false-flag a pure relocation as a rename. Each member preserves its basename by
-        // construction, so a namespace / cluster move is (correctly) never flagged here.
-        $unsupported = null;
+        // construction, so a namespace / cluster move is (correctly) never flagged as a rename.
+        //
+        // $renames maps declaring-file relative path → [old base, new base, same-namespace?]. A member
+        // that renames AND changes namespace is still one entry; only the same-namespace subset licenses
+        // the "repoint an unimported sibling in place" step (a cross-namespace bare ref still needs an
+        // import added — guided path).
+        $renames = [];
+        $renameDeclEdits = [];
         foreach ($report->references() as $ref) {
             if ($ref->category !== ReferenceCategory::NamespaceDeclaration || $ref->newFqn === null) {
                 continue;
             }
-            $oldBase = $this->basenameOf(Target::normalize($ref->matchedFqn));
-            $newBase = $this->basenameOf(Target::normalize($ref->newFqn));
-            if ($oldBase !== $newBase) {
-                $unsupported = sprintf(
-                    'basename rename (%s → %s): the class-declaration token is not in the audit finding-set — '
-                    .'deferred to the guided rename path (ticket 02: the rename cascade is Tier-3 advisory).',
-                    $oldBase,
-                    $newBase,
-                );
-                break;
+            $oldFqn = Target::normalize($ref->matchedFqn);
+            $newFqn = Target::normalize($ref->newFqn);
+            $oldBase = $this->basenameOf($oldFqn);
+            $newBase = $this->basenameOf($newFqn);
+            if ($oldBase === $newBase) {
+                continue; // pure relocation of this member — nothing rename-specific to do.
+            }
+
+            $sameNamespace = $this->namespaceOf($oldFqn) === $this->namespaceOf($newFqn);
+            $renames[$ref->relativePath] = [
+                'oldBase' => $oldBase,
+                'newBase' => $newBase,
+                'sameNamespace' => $sameNamespace,
+            ];
+
+            // (a) The `class <Old>` declaration token — not in the audit finding-set (it records the
+            // `namespace` line only), so we locate it now by re-reading the declaring file's AST.
+            $declEdit = $this->declarationEdit($ref, $oldBase, $newBase);
+            if ($declEdit !== null) {
+                $renameDeclEdits[] = $declEdit;
             }
         }
 
@@ -84,7 +105,7 @@ class RewritePlanner
         // import added, which is import management beyond a single-span byte-splice → guided path.
         [$importedInFile, $declarationFile] = $this->fileContext($report);
 
-        $edits = [];
+        $edits = $renameDeclEdits;
         $skips = [];
 
         foreach ($report->references() as $ref) {
@@ -96,10 +117,14 @@ class RewritePlanner
 
             // Re-examine a no-op that leans on import/namespace context: safe only if imported in-file
             // or self-contained in the moved file; otherwise it is a context-resolved reference the
-            // splice alone can't keep valid.
+            // splice alone can't keep valid — UNLESS this is a same-namespace RENAME. A rename that
+            // keeps the namespace leaves the old namespace populated, so a bare same-namespace short
+            // reference does NOT strand — it just needs its short name repointed in place (a real edit),
+            // which the rename produced above via decide() (basename Old → basename New).
             if ($decision['action'] === 'noop' && $this->isContextDependent($ref)
                 && $ref->relativePath !== $declarationFile
-                && ! isset($importedInFile[$ref->relativePath])) {
+                && ! isset($importedInFile[$ref->relativePath])
+                && ! $this->isSameNamespaceRenameRef($ref)) {
                 $decision = ['action' => 'skip', 'reason' => 'unqualified reference resolved by namespace context (no import of the target in this file) — relocating it needs an import added — guided path'];
             }
 
@@ -120,7 +145,101 @@ class RewritePlanner
             // 'noop' contributes nothing — the import repoint already covers it.
         }
 
-        return new RewritePlan($report->target, $edits, $skips, $this->physicalMoves($report), $unsupported);
+        return new RewritePlan($report->target, $edits, $skips, $this->physicalMoves($report), null);
+    }
+
+    /**
+     * A same-namespace rename repoints a bare short reference (`Foo` → `Bar`) IN PLACE — safe because
+     * the namespace does not empty out. `decide()` already produces that basename edit; this only
+     * licenses it past the "no-import short reference" skip. A cross-namespace rename does NOT qualify —
+     * that bare ref would still be stranded and needs an import added (guided path). The check is per
+     * reference: its matched FQN is a member that renames within its own namespace.
+     */
+    private function isSameNamespaceRenameRef(Reference $ref): bool
+    {
+        if ($ref->newFqn === null) {
+            return false;
+        }
+        $old = Target::normalize($ref->matchedFqn);
+        $new = Target::normalize($ref->newFqn);
+
+        return $this->basenameOf($old) !== $this->basenameOf($new)
+            && $this->namespaceOf($old) === $this->namespaceOf($new);
+    }
+
+    /**
+     * The `class <Old>` (interface/enum/trait) declaration-token edit for a renamed member — the touch-
+     * point the audit finding-set does NOT carry (it records the moved file's `namespace X;` line, not
+     * its `class Name` token). We re-read the declaring file's AST, find the class-like whose
+     * `namespacedName` is the OLD FQN, and splice its short-name identifier span `<Old>` → `<New>`.
+     *
+     * Returns null when the file can't be read/parsed or the declaration isn't found — the caller then
+     * simply omits the declaration edit (the reference repoints + physical move still preview), so a
+     * malformed source fails visibly rather than corrupting.
+     */
+    private function declarationEdit(Reference $decl, string $oldBase, string $newBase): ?PlannedEdit
+    {
+        $code = @file_get_contents($decl->file);
+        if ($code === false || $code === '') {
+            return null;
+        }
+
+        $ast = (new ParserFactory)->createForNewestSupportedVersion()->parse($code);
+        if ($ast === null) {
+            return null;
+        }
+
+        $traverser = new NodeTraverser;
+        $traverser->addVisitor(new NameResolver(null, ['replaceNodes' => false]));
+        $traverser->traverse($ast);
+
+        $oldFqn = Target::normalize($decl->matchedFqn);
+        $visitor = new class($oldFqn) extends NodeVisitorAbstract
+        {
+            public ?Node\Identifier $name = null;
+
+            public function __construct(private string $oldFqn) {}
+
+            public function enterNode(Node $node): null
+            {
+                if ($node instanceof Node\Stmt\ClassLike
+                    && $node->name instanceof Node\Identifier
+                    && $node->namespacedName !== null
+                    && Target::normalize($node->namespacedName->toString()) === $this->oldFqn) {
+                    $this->name = $node->name;
+                }
+
+                return null;
+            }
+        };
+        $walk = new NodeTraverser;
+        $walk->addVisitor($visitor);
+        $walk->traverse($ast);
+
+        if ($visitor->name === null) {
+            return null;
+        }
+
+        $start = $visitor->name->getStartFilePos();
+        $end = $visitor->name->getEndFilePos();
+        if ($start < 0 || $end < 0) {
+            return null;
+        }
+        $span = substr($code, $start, $end - $start + 1);
+        if ($span !== $oldBase) {
+            return null; // span drifted from the expected short name — do not splice.
+        }
+
+        return new PlannedEdit(
+            file: $decl->file,
+            relativePath: $decl->relativePath,
+            line: $visitor->name->getStartLine(),
+            startPos: $start,
+            endPos: $end,
+            oldText: $oldBase,
+            newText: $newBase,
+            category: ReferenceCategory::NameReference,
+        );
     }
 
     /**

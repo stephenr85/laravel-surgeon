@@ -119,11 +119,81 @@ it('never touches a Tier-2 or Tier-3 reference', function () {
         ->and($files)->not->toContain('routes/web.php');
 });
 
-it('marks a basename rename unsupported rather than emit half-renamed code', function () {
-    $plan = estatePlan('Vendor\\Old\\Widget', 'Vendor\\Other\\Gadget');
+it('plans a same-namespace class rename: declaration token + short-name repoints, no refusal', function () {
+    // Foo in NsA\Sub, referenced from a sibling by `use NsA\Sub\Foo; new Foo(); Foo::class; fn(Foo $f)`,
+    // plus a control reference to an unrelated NsA\Sub\Foobar that must stay untouched.
+    $root = surgeon_tmp('rename-same-ns');
+    try {
+        surgeon_write($root.'/composer.json', json_encode(['autoload' => ['psr-4' => ['NsA\\' => 'src/']]]));
+        surgeon_write($root.'/src/Sub/Foo.php', "<?php\n\nnamespace NsA\\Sub;\n\nclass Foo {}\n");
+        surgeon_write($root.'/src/Sub/Foobar.php', "<?php\n\nnamespace NsA\\Sub;\n\nclass Foobar {}\n");
+        surgeon_write(
+            $root.'/src/Consumer.php',
+            "<?php\n\nnamespace NsA;\n\nuse NsA\\Sub\\Foo;\nuse NsA\\Sub\\Foobar;\n\n"
+            ."class Consumer\n{\n    public function x(Foo \$f): Foo { return new Foo(); }\n"
+            ."    public function id() { return Foo::class; }\n"
+            ."    public function control() { return new Foobar(); }\n}\n",
+        );
 
-    expect($plan->isUnsupported())->toBeTrue()
-        ->and($plan->unsupported)->toContain('basename rename');
+        $report = (new AuditEngine)->audit([$root], Target::relocatingTo('NsA\\Sub\\Foo', 'NsA\\Sub\\Bar'));
+        $plan = (new RewritePlanner(new Psr4Resolver([$root])))->plan($report);
+
+        expect($plan->isUnsupported())->toBeFalse()
+            ->and($plan->skips)->toBe([]);
+
+        // The declaration token `class Foo` → `class Bar` is planned (a NameReference edit on Foo.php).
+        $declEdit = collect($plan->edits)->first(fn ($e) => $e->relativePath === 'src/Sub/Foo.php' && $e->oldText === 'Foo');
+        expect($declEdit)->not->toBeNull()
+            ->and($declEdit->newText)->toBe('Bar');
+
+        // The consumer's `use` line takes the whole new FQN; every short-name usage becomes Bar.
+        $consumerEdits = collect($plan->edits)->where('relativePath', 'src/Consumer.php');
+        expect($consumerEdits->firstWhere('oldText', 'NsA\\Sub\\Foo')->newText)->toBe('NsA\\Sub\\Bar')
+            ->and($consumerEdits->where('oldText', 'Foo')->pluck('newText')->unique()->all())->toBe(['Bar'])
+            // The control `Foobar` (use, typehint, new) is never touched.
+            ->and($consumerEdits->contains(fn ($e) => str_contains($e->oldText, 'Foobar')))->toBeFalse();
+
+        // A basename-only physical move in the same directory.
+        expect($plan->move)->not->toBeNull()
+            ->and($plan->move->fromRelative)->toBe('src/Sub/Foo.php')
+            ->and($plan->move->toRelative)->toBe('src/Sub/Bar.php');
+    } finally {
+        surgeon_rrmdir($root);
+    }
+});
+
+it('renames WITH a namespace change too: declaration token + namespace line both rewrite, physical move to the new home', function () {
+    // Foo\Widget → Bar\Gadget — the namespace AND the basename change. An imported consumer's `use`
+    // line + short usages repoint; the declaration token and its own namespace line both rewrite.
+    $root = surgeon_tmp('rename-ns-change');
+    try {
+        surgeon_write($root.'/composer.json', json_encode(['autoload' => ['psr-4' => ['Acme\\' => 'src/']]]));
+        surgeon_write($root.'/src/Foo/Widget.php', "<?php\n\nnamespace Acme\\Foo;\n\nclass Widget {}\n");
+        surgeon_write($root.'/src/Consumer.php', "<?php\n\nnamespace Acme;\n\nuse Acme\\Foo\\Widget;\n\nclass Consumer\n{\n    public function m(Widget \$w) { return Widget::class; }\n}\n");
+
+        $report = (new AuditEngine)->audit([$root], Target::relocatingTo('Acme\\Foo\\Widget', 'Acme\\Bar\\Gadget'));
+        $plan = (new RewritePlanner(new Psr4Resolver([$root])))->plan($report);
+
+        expect($plan->isUnsupported())->toBeFalse();
+
+        // The declaration token renamed even though the namespace also moved.
+        $declEdit = collect($plan->edits)->first(fn ($e) => $e->relativePath === 'src/Foo/Widget.php' && $e->oldText === 'Widget');
+        expect($declEdit)->not->toBeNull()->and($declEdit->newText)->toBe('Gadget');
+        // Its own namespace line moved to the new namespace.
+        expect(collect($plan->edits)->contains(fn ($e) => $e->oldText === 'Acme\\Foo' && $e->newText === 'Acme\\Bar'))->toBeTrue();
+
+        // The imported consumer repoints (use → full new FQN; short names → new basename).
+        $consumerEdits = collect($plan->edits)->where('relativePath', 'src/Consumer.php');
+        expect($consumerEdits->firstWhere('oldText', 'Acme\\Foo\\Widget')->newText)->toBe('Acme\\Bar\\Gadget')
+            ->and($consumerEdits->where('oldText', 'Widget')->pluck('newText')->unique()->all())->toBe(['Gadget']);
+
+        // The physical move lands the file at its NEW namespace's PSR-4 path with the new basename.
+        expect($plan->move)->not->toBeNull()
+            ->and($plan->move->fromRelative)->toBe('src/Foo/Widget.php')
+            ->and($plan->move->toRelative)->toBe('src/Bar/Gadget.php');
+    } finally {
+        surgeon_rrmdir($root);
+    }
 });
 
 it('throws when handed an insight-only (non-relocation) finding-set', function () {
