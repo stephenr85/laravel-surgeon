@@ -20,9 +20,15 @@
         "rushing/php-package-topology": "dev-main"
     },
     "require-dev": {
+        "laravel/mcp": "^0.8",
         "laravel/pint": "^1.0",
         "orchestra/testbench": "^9.0|^10.0|^11.0",
-        "pestphp/pest": "^2.0|^3.0"
+        "pestphp/pest": "^2.0|^3.0",
+        "rushing/laravel-mcp-registry": "dev-main"
+    },
+    "suggest": {
+        "laravel/mcp": "Ships surgeon:* as reflected MCP tools via Rushing\\Surgeon\\Mcp\\SurgeonMcpServer (auto-registered when installed).",
+        "rushing/laravel-mcp-registry": "The generic artisan-command→MCP-tool reflection bridge the surgeon MCP server mounts."
     },
     "autoload": {
         "psr-4": {
@@ -52,6 +58,13 @@
         {
             "type": "path",
             "url": "../laravel-doctor",
+            "options": {
+                "symlink": true
+            }
+        },
+        {
+            "type": "path",
+            "url": "../laravel-mcp-registry",
             "options": {
                 "symlink": true
             }

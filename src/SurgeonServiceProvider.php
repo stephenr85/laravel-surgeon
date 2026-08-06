@@ -3,6 +3,8 @@
 namespace Rushing\Surgeon;
 
 use Illuminate\Support\ServiceProvider as BaseServiceProvider;
+use Laravel\Mcp\Facades\Mcp;
+use Rushing\McpRegistry\Bridge\ArtisanCommandReflector;
 use Rushing\Surgeon\Console\AuditCommand;
 use Rushing\Surgeon\Console\CanonicalizeCommand;
 use Rushing\Surgeon\Console\LintCommand;
@@ -11,6 +13,7 @@ use Rushing\Surgeon\Console\OverlayCommand;
 use Rushing\Surgeon\Console\PingCommand;
 use Rushing\Surgeon\Console\ReplayCommand;
 use Rushing\Surgeon\Console\TraceCommand;
+use Rushing\Surgeon\Mcp\SurgeonMcpServer;
 use Rushing\Surgeon\Operation\ConformanceManifest;
 use Rushing\Surgeon\Operation\NullConformanceManifest;
 
@@ -54,5 +57,24 @@ class SurgeonServiceProvider extends BaseServiceProvider
                 LintCommand::class,
             ]);
         }
+
+        $this->registerMcpServer();
+    }
+
+    /**
+     * Self-register the reflected surgeon MCP server ({@see SurgeonMcpServer}),
+     * guarded on laravel/mcp actually being installed. laravel/mcp + rushing/laravel-mcp-registry are
+     * optional (`suggest`/require-dev): a host without them autoloads nothing here and pays nothing —
+     * a host that composes surgeon + laravel/mcp gets `mcp:start surgeon` for free, no per-app wiring.
+     * The registry bridge is the reflection engine the server mounts; both must be present.
+     */
+    protected function registerMcpServer(): void
+    {
+        if (! class_exists(Mcp::class)
+            || ! class_exists(ArtisanCommandReflector::class)) {
+            return;
+        }
+
+        Mcp::local('surgeon', SurgeonMcpServer::class);
     }
 }
