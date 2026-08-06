@@ -1,0 +1,10 @@
+{
+  "name": "HTTP",
+  "description": "Auth support-types move tower -> beam-accounts (HTTP-04 app-side repoint commit). A pure CONSUMER REPOINT, the FR shape: the app repoints its import sites for auth types that moved down into splicewire/laravel-beam-accounts. TokenProvenance and CentralRoot are the two the app actually imports (AuthTokenFactory also moved but had no app import site, so it is deliberately absent). Replays at 100% recall (0 miss / 0 over-reach) against parent-of-HTTP-04 .. HTTP-04.",
+  "beforeRef": "405e0b3b9110df9d73ae9f2f67668574c047ddd9",
+  "afterRef": "ab830bd09",
+  "pairs": [
+    {"old": "Splicewire\\Tower\\Enums\\TokenProvenance", "new": "Splicewire\\Beam\\Accounts\\Enums\\TokenProvenance"},
+    {"old": "Splicewire\\Tower\\Support\\CentralRoot", "new": "Splicewire\\Beam\\Accounts\\Support\\CentralRoot"}
+  ]
+}

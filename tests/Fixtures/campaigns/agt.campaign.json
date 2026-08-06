@@ -1,0 +1,23 @@
+{
+  "name": "AGT",
+  "description": "Assistant -> Agent entity rename (AGT-02 backend commit). A RENAME campaign: app-local App\\...\\Assistant* classes plus the tower Splicewire\\Tower\\...\\Assistant* symbols the app consumes are renamed to *Agent*. Unlike FR (a pure consumer repoint), the landing commit also carries the rename's NON-FQN cascade (route aliases /assistants -> /agents, config prose, table/relationship-name churn, doc comments) which the FQN-only audit correctly MISSES -> Tier-3 advisory territory, expected not a defect. Ground-truth range: parent-of-AGT-02 .. AGT-02 backend commit.",
+  "beforeRef": "93f17c17e8e2c1d58348aa8491aab064e0a86aa5",
+  "afterRef": "6bb7cea0682ee158e3e5b4b61a272c0b322d16b2",
+  "pairs": [
+    {"old": "App\\Http\\Controllers\\Api\\V1\\AssistantController", "new": "App\\Http\\Controllers\\Api\\V1\\AgentController"},
+    {"old": "App\\Http\\Requests\\Api\\V1\\AssistantCreateRequest", "new": "App\\Http\\Requests\\Api\\V1\\AgentCreateRequest"},
+    {"old": "App\\Http\\Requests\\Api\\V1\\AssistantIndexRequest", "new": "App\\Http\\Requests\\Api\\V1\\AgentIndexRequest"},
+    {"old": "App\\Http\\Requests\\Api\\V1\\AssistantUpdateRequest", "new": "App\\Http\\Requests\\Api\\V1\\AgentUpdateRequest"},
+    {"old": "App\\Console\\Commands\\OpenAi\\CleanupRemoteAssistants", "new": "App\\Console\\Commands\\OpenAi\\CleanupRemoteAgents"},
+    {"old": "Database\\Seeders\\AssistantSeeder", "new": "Database\\Seeders\\AgentSeeder"},
+    {"old": "Splicewire\\Tower\\Models\\Assistant", "new": "Splicewire\\Tower\\Models\\Agent"},
+    {"old": "Splicewire\\Tower\\Data\\AssistantData", "new": "Splicewire\\Tower\\Data\\AgentData"},
+    {"old": "Splicewire\\Tower\\Data\\AssistantInputData", "new": "Splicewire\\Tower\\Data\\AgentInputData"},
+    {"old": "Splicewire\\Tower\\Data\\Filters\\AssistantFilterData", "new": "Splicewire\\Tower\\Data\\Filters\\AgentFilterData"},
+    {"old": "Splicewire\\Tower\\Data\\Filters\\Options\\AssistantOptionsSource", "new": "Splicewire\\Tower\\Data\\Filters\\Options\\AgentOptionsSource"},
+    {"old": "Splicewire\\Tower\\InstructionsProviders\\AssistantInstructionsProvider", "new": "Splicewire\\Tower\\InstructionsProviders\\AgentInstructionsProvider"},
+    {"old": "Splicewire\\Tower\\Policies\\AssistantPolicy", "new": "Splicewire\\Tower\\Policies\\AgentPolicy"},
+    {"old": "Splicewire\\Tower\\Provisioning\\SeedDefaultAssistant", "new": "Splicewire\\Tower\\Provisioning\\SeedDefaultAgent"},
+    {"old": "Splicewire\\Tower\\QueryBuilders\\AssistantQuery", "new": "Splicewire\\Tower\\QueryBuilders\\AgentQuery"}
+  ]
+}
