@@ -6,6 +6,7 @@ use Illuminate\Console\Command;
 use Rushing\Doctor\DoctorStatus;
 use Rushing\Surgeon\Audit\AuditEngine;
 use Rushing\Surgeon\Audit\AuditReport;
+use Rushing\Surgeon\Audit\MovingSet;
 use Rushing\Surgeon\Audit\PackageGraph;
 use Rushing\Surgeon\Audit\Target;
 use Rushing\Surgeon\Audit\Tier;
@@ -28,11 +29,11 @@ use Rushing\Surgeon\Audit\Tier;
 class TraceCommand extends Command
 {
     protected $signature = 'surgeon:trace
-        {--symbol= : Audit references to one exact fully-qualified name}
-        {--namespace= : Audit references to a namespace prefix and everything under it}
+        {--symbol=* : Audit references to an exact fully-qualified name (repeatable — a set of symbols moving together)}
+        {--namespace=* : Audit references to a namespace prefix and everything under it (repeatable)}
         {--pattern= : Audit references whose FQN matches this regex}
         {--dir= : Audit inbound references to every symbol declared under this directory}
-        {--to= : Canonical destination FQN — turns the audit into a relocation pre-pass (cycle risk)}
+        {--to= : Canonical destination FQN — turns the audit into a relocation pre-pass (cycle risk). With multiple --symbol/--namespace it is the ONE destination the whole ATOMIC CLUSTER lands in.}
         {--root=* : Root directories to scan (absolute or cwd-relative); defaults to the app base path}
         {--json : Emit the machine-readable finding-set as JSON instead of a table}
         {--out= : Write the JSON finding-set to this file (implies --json)}';
@@ -42,7 +43,7 @@ class TraceCommand extends Command
     public function handle(): int
     {
         try {
-            $target = $this->resolveTarget();
+            [$target, $movingSet] = $this->resolveTarget();
         } catch (\InvalidArgumentException $e) {
             $this->error($e->getMessage());
 
@@ -57,7 +58,7 @@ class TraceCommand extends Command
         }
 
         $graph = PackageGraph::fromRoots($roots, $this->vendorPath($roots));
-        $report = (new AuditEngine)->audit($roots, $target, $graph);
+        $report = (new AuditEngine)->audit($roots, $target, $graph, $movingSet);
 
         if ($this->option('json') || $this->option('out')) {
             return $this->emitJson($report);
@@ -66,30 +67,71 @@ class TraceCommand extends Command
         return $this->emitTable($report);
     }
 
-    private function resolveTarget(): Target
+    /**
+     * Resolve the audit target and, for a relocation, its atomic {@see MovingSet} context.
+     *
+     * `--symbol` / `--namespace` are repeatable: with a single member the target is the plain lone
+     * relocation (byte-identical to before, `MovingSet` null); with several members sharing one `--to`
+     * they form an ATOMIC CLUSTER — one finding-set for the whole set, cycle-risk evaluated against the
+     * post-move graph so intra-cluster references are ordinary repoints, not upward edges.
+     *
+     * @return array{0: Target, 1: MovingSet|null}
+     */
+    private function resolveTarget(): array
     {
-        $chosen = array_filter([
-            'symbol' => $this->option('symbol'),
-            'namespace' => $this->option('namespace'),
-            'pattern' => $this->option('pattern'),
-            'dir' => $this->option('dir'),
-        ], fn ($v) => $v !== null && $v !== '');
+        $symbols = $this->stringList('symbol');
+        $namespaces = $this->stringList('namespace');
+        $pattern = (string) ($this->option('pattern') ?? '');
+        $dir = (string) ($this->option('dir') ?? '');
 
-        if (count($chosen) !== 1) {
-            throw new \InvalidArgumentException('Pass exactly one of --symbol, --namespace, --pattern, --dir.');
+        $kindsUsed = ($symbols !== [] ? 1 : 0) + ($namespaces !== [] ? 1 : 0)
+            + ($pattern !== '' ? 1 : 0) + ($dir !== '' ? 1 : 0);
+
+        $to = (string) ($this->option('to') ?? '');
+
+        // Pattern / dir are single-kind insight targets, never relocations and never combinable.
+        if ($pattern !== '' || $dir !== '') {
+            if ($kindsUsed !== 1) {
+                throw new \InvalidArgumentException('--pattern / --dir cannot be combined with other target kinds.');
+            }
+            if ($to !== '') {
+                throw new \InvalidArgumentException('--to (relocation) requires --symbol or --namespace.');
+            }
+
+            return [$pattern !== '' ? Target::pattern($pattern) : Target::directory($this->absolutePath($dir)), null];
         }
 
-        $to = $this->option('to');
-        if ($to !== null && $to !== '' && ! isset($chosen['symbol']) && ! isset($chosen['namespace'])) {
-            throw new \InvalidArgumentException('--to (relocation) requires --symbol or --namespace.');
+        if ($symbols === [] && $namespaces === []) {
+            throw new \InvalidArgumentException('Pass exactly one of --symbol, --namespace, --pattern, --dir (--symbol/--namespace are repeatable for an atomic cluster).');
         }
 
-        return match (array_key_first($chosen)) {
-            'symbol' => $to ? Target::relocatingTo($chosen['symbol'], $to) : Target::symbol($chosen['symbol']),
-            'namespace' => $to ? $this->namespaceMove($chosen['namespace'], $to) : Target::namespace($chosen['namespace']),
-            'pattern' => Target::pattern($chosen['pattern']),
-            'dir' => Target::directory($this->absolutePath($chosen['dir'])),
-        };
+        // An insight hunt (no --to): exactly one member of one kind, matching the historical contract.
+        if ($to === '') {
+            $memberCount = count($symbols) + count($namespaces);
+            if ($memberCount !== 1) {
+                throw new \InvalidArgumentException('Multiple --symbol/--namespace need a shared --to (an atomic cluster-move); an insight hunt takes exactly one target.');
+            }
+
+            return [$symbols !== [] ? Target::symbol($symbols[0]) : Target::namespace($namespaces[0]), null];
+        }
+
+        // A single lone relocation stays byte-identical to the historical contract: `--to` is the
+        // VERBATIM new FQN (a full-FQN move OR a basename rename), never basename-appended, and carries
+        // no MovingSet — every single-symbol / single-namespace behaviour is preserved exactly.
+        if (count($symbols) + count($namespaces) === 1) {
+            return [
+                $symbols !== []
+                    ? Target::relocatingTo($symbols[0], $to)
+                    : $this->namespaceMove($namespaces[0], $to),
+                null,
+            ];
+        }
+
+        // Two or more members (or a symbol + namespace) form the atomic cluster moving to the shared
+        // `--to` destination namespace — each member lands as `<to>\<basename>` / a prefix-swap.
+        $movingSet = MovingSet::of($symbols, $namespaces, $to);
+
+        return [$movingSet->toTarget(), $movingSet];
     }
 
     private function namespaceMove(string $old, string $new): Target
@@ -98,6 +140,20 @@ class TraceCommand extends Command
         $target->newFqn = Target::normalize($new);
 
         return $target;
+    }
+
+    /**
+     * A repeatable string option as a clean list (drops empties). Laravel gives `=*` options an array;
+     * a bare `= ` legacy single value also arrives here as a one-element array.
+     *
+     * @return list<string>
+     */
+    private function stringList(string $name): array
+    {
+        return array_values(array_filter(
+            array_map(fn ($v) => (string) $v, (array) $this->option($name)),
+            fn (string $v) => $v !== '',
+        ));
     }
 
     /** @return list<string> */

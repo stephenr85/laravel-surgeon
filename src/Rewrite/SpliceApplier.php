@@ -78,10 +78,11 @@ class SpliceApplier
             $this->write($write['file'], $write['updated']);
         }
 
-        // Phase 3 — the tool-owned physical move (the moved file was just spliced in place, then relocates).
-        if ($plan->move !== null) {
-            $this->relocate($plan->move);
-            $manifest->recordMove($plan->move);
+        // Phase 3 — the tool-owned physical moves (each moved file was just spliced in place, then
+        // relocates). An atomic cluster relocates every member here — one move per moving sibling.
+        foreach ($plan->moves as $move) {
+            $this->relocate($move);
+            $manifest->recordMove($move);
         }
 
         return $manifest;
@@ -100,8 +101,11 @@ class SpliceApplier
      */
     public function rollback(TouchManifest $manifest): void
     {
-        if ($manifest->move !== null) {
-            $this->reverseRelocate($manifest->move);
+        // Reverse every physical move (an atomic cluster relocated one file per member). Reverse order
+        // is irrelevant — each move is independent (distinct source/destination paths) — but mirrors the
+        // forward pass for legibility.
+        foreach (array_reverse($manifest->moves) as $move) {
+            $this->reverseRelocate($move);
         }
 
         foreach ($manifest->writes as $write) {

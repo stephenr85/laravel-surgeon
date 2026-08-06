@@ -164,7 +164,7 @@ class MoveCommand extends Command
 
         $this->line('');
         $this->info('surgeon:move applied: '.count($plan->edits).' splice(s) across '
-            .count($plan->editsByFile()).' file(s)'.($plan->move !== null ? ' + 1 physical move' : '').'.');
+            .count($plan->editsByFile()).' file(s)'.($plan->moves !== [] ? ' + '.count($plan->moves).' physical move(s)' : '').'.');
         $this->line("  touch-manifest → {$manifestPath}");
         $this->line('  <fg=yellow>Not committed.</> Review the staged diff; the manifest is the scoped-undo surface.');
         $this->renderSkips($plan);
@@ -182,11 +182,16 @@ class MoveCommand extends Command
      */
     private function renderDestinationDepAdvisory(RewritePlan $plan): void
     {
-        if ($plan->move === null || ! $plan->move->crossRepo || $plan->move->destinationRepo === null) {
-            return;
+        $advisories = [];
+        foreach ($plan->moves as $move) {
+            if (! $move->crossRepo || $move->destinationRepo === null) {
+                continue;
+            }
+            foreach ((new DestinationDepAdvisor)->advise($move->to, $move->destinationRepo) as $line) {
+                $advisories[] = $line;
+            }
         }
-
-        $advisories = (new DestinationDepAdvisor)->advise($plan->move->to, $plan->move->destinationRepo);
+        $advisories = array_values(array_unique($advisories));
         if ($advisories === []) {
             return;
         }
@@ -217,10 +222,12 @@ class MoveCommand extends Command
             }
         }
 
-        if ($plan->move !== null) {
+        if ($plan->moves !== []) {
             $this->line('');
-            $this->line('  <options=bold>physical move</>');
-            $this->line('    <fg=gray>'.$plan->move->fromRelative.'</>  →  <fg=green>'.$plan->move->toRelative.'</>');
+            $this->line('  <options=bold>physical move'.(count($plan->moves) > 1 ? 's' : '').'</>');
+            foreach ($plan->moves as $move) {
+                $this->line('    <fg=gray>'.$move->fromRelative.'</>  →  <fg=green>'.$move->toRelative.'</>');
+            }
         }
 
         $this->renderSkips($plan);
@@ -304,10 +311,14 @@ class MoveCommand extends Command
         // that is one root; for a cross-repo promotion (ticket 14) the destination lives under a
         // DIFFERENT named root (the package) — so the writer only honours it when the operator named
         // *both* the source and destination roots (`--root=<app> --root=<pkg>`). Naming only one refuses
-        // the relocation rather than writing into an unauthorized tree.
-        $move = ($plan->move !== null && $under($plan->move->from) && $under($plan->move->to)) ? $plan->move : null;
+        // that member's relocation rather than writing into an unauthorized tree. An atomic cluster
+        // filters each member move independently.
+        $moves = array_values(array_filter(
+            $plan->moves,
+            fn ($m) => $under($m->from) && $under($m->to),
+        ));
 
-        return [new RewritePlan($plan->target, $allowed, $plan->skips, $move, $plan->unsupported), $excluded];
+        return [new RewritePlan($plan->target, $allowed, $plan->skips, $moves, $plan->unsupported), $excluded];
     }
 
     /**
@@ -361,8 +372,8 @@ class MoveCommand extends Command
     private function stageWithGit(TouchManifest $manifest, array $roots, string $manifestPath): void
     {
         $paths = array_merge($manifest->touchedFiles(), [$manifestPath]);
-        if ($manifest->move !== null) {
-            $paths[] = $manifest->move['from']; // stage the deletion of the old path too
+        foreach ($manifest->moves as $move) {
+            $paths[] = $move['from']; // stage the deletion of each moved member's old path too
         }
 
         foreach ($roots as $root) {

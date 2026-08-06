@@ -18,20 +18,41 @@ use Rushing\Surgeon\Audit\Target;
 class RewritePlan
 {
     /**
+     * The moved symbol's own physical file move — the FIRST move of the plan. For a single-symbol
+     * relocation this is the only move; kept as a plain public property so every existing single-move
+     * caller and test (`$plan->move->...`) is byte-identical.
+     */
+    public ?PhysicalMove $move;
+
+    /**
+     * A cluster relocation moves several files at once — one physical move per moving member — so the
+     * plan carries the FULL list here. {@see $move} is `moves[0]`. For a single-symbol relocation this
+     * holds exactly `[$move]` (or `[]`), so the singular path is unchanged.
+     *
+     * @var list<PhysicalMove>
+     */
+    public array $moves;
+
+    /**
      * @param  list<PlannedEdit>  $edits
      * @param  list<SkippedReference>  $skips
+     * @param  PhysicalMove|list<PhysicalMove>|null  $move  one move (single relocation) or a list of
+     *                                                      moves (an atomic cluster) — see {@see $moves}
      */
     public function __construct(
         public Target $target,
         public array $edits,
         public array $skips,
-        public ?PhysicalMove $move = null,
+        PhysicalMove|array|null $move = null,
         public ?string $unsupported = null,
-    ) {}
+    ) {
+        $this->moves = $move === null ? [] : (is_array($move) ? array_values($move) : [$move]);
+        $this->move = $this->moves[0] ?? null;
+    }
 
     public function isEmpty(): bool
     {
-        return $this->edits === [] && $this->move === null;
+        return $this->edits === [] && $this->moves === [];
     }
 
     /** A relocation this Tier-1 pass will not apply (e.g. a basename rename it can't fully honour). */
@@ -60,8 +81,8 @@ class RewritePlan
     public function touchedFiles(): array
     {
         $files = array_map(fn (PlannedEdit $e) => $e->file, $this->edits);
-        if ($this->move !== null) {
-            $files[] = $this->move->from;
+        foreach ($this->moves as $move) {
+            $files[] = $move->from;
         }
 
         return array_values(array_unique($files));
@@ -81,10 +102,12 @@ class RewritePlan
                 'files' => count($this->editsByFile()),
                 'skips' => count($this->skips),
                 'physical_move' => $this->move !== null,
+                'physical_moves' => count($this->moves),
             ],
             'edits' => array_map(fn (PlannedEdit $e) => $e->toArray(), $this->edits),
             'skips' => array_map(fn (SkippedReference $s) => $s->toArray(), $this->skips),
             'move' => $this->move?->toArray(),
+            'moves' => array_map(fn (PhysicalMove $m) => $m->toArray(), $this->moves),
         ];
     }
 }

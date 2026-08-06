@@ -21,6 +21,14 @@ class TouchManifest
     /** @var array{from: string, to: string, fromRelative: string, toRelative: string, crossRepo: bool, sourceRepo: ?string, destinationRepo: ?string}|null */
     public ?array $move = null;
 
+    /**
+     * Every recorded physical move — one per moving member for an atomic cluster. {@see $move} is the
+     * first (and, for a single-symbol relocation, only) entry, kept for backward-compatible callers.
+     *
+     * @var list<array{from: string, to: string, fromRelative: string, toRelative: string, crossRepo: bool, sourceRepo: ?string, destinationRepo: ?string}>
+     */
+    public array $moves = [];
+
     public function __construct(public RewritePlan $plan) {}
 
     public function recordWrite(string $file, string $relativePath, string $original, string $updated): void
@@ -34,7 +42,7 @@ class TouchManifest
         // reverse a two-repo copy+delete (ticket 14), and so the deterministic gate can target the
         // destination repo. They are omitted from the persisted sidecar shape (that stays a legible
         // relative-path operation manifest, not an execution-mode dump) — see {@see toArray()}.
-        $this->move = [
+        $entry = [
             'from' => $move->from,
             'to' => $move->to,
             'fromRelative' => $move->fromRelative,
@@ -43,14 +51,16 @@ class TouchManifest
             'sourceRepo' => $move->sourceRepo,
             'destinationRepo' => $move->destinationRepo,
         ];
+        $this->moves[] = $entry;
+        $this->move ??= $entry;
     }
 
     /** @return list<string> absolute paths of every file the tool wrote or relocated */
     public function touchedFiles(): array
     {
         $files = array_map(fn (array $w) => $w['file'], $this->writes);
-        if ($this->move !== null) {
-            $files[] = $this->move['to'];
+        foreach ($this->moves as $move) {
+            $files[] = $move['to'];
         }
 
         return array_values(array_unique($files));
@@ -68,8 +78,10 @@ class TouchManifest
     public function gateRoots(array $namedRoots): array
     {
         $roots = $namedRoots;
-        if ($this->move !== null && ! empty($this->move['crossRepo']) && $this->move['destinationRepo'] !== null) {
-            $roots[] = $this->move['destinationRepo'];
+        foreach ($this->moves as $move) {
+            if (! empty($move['crossRepo']) && $move['destinationRepo'] !== null) {
+                $roots[] = $move['destinationRepo'];
+            }
         }
 
         return array_values(array_unique(array_filter($roots, fn ($r) => $r !== null && $r !== '')));
@@ -88,6 +100,10 @@ class TouchManifest
                 'from' => $this->move['fromRelative'],
                 'to' => $this->move['toRelative'],
             ],
+            'moves' => array_map(fn (array $m) => [
+                'from' => $m['fromRelative'],
+                'to' => $m['toRelative'],
+            ], $this->moves),
             'operation' => $this->plan->toArray(),
         ];
     }

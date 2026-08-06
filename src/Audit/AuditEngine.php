@@ -36,8 +36,13 @@ class AuditEngine
      *
      * @param  list<string>  $roots  absolute directory roots to scan (each is one repo/package)
      * @param  PackageGraph|null  $graph  the package graph for cycle-risk (skipped when null / no move)
+     * @param  MovingSet|null  $movingSet  the atomic cluster this target belongs to, when tracing a
+     *                                     SET of symbols that relocate together — so an intra-set
+     *                                     reference is evaluated against the POST-MOVE graph (both
+     *                                     endpoints land in the destination) instead of being flagged
+     *                                     as an upward edge. Null for a lone single-symbol relocation.
      */
-    public function audit(array $roots, Target $target, ?PackageGraph $graph = null): AuditReport
+    public function audit(array $roots, Target $target, ?PackageGraph $graph = null, ?MovingSet $movingSet = null): AuditReport
     {
         $roots = array_values(array_map(fn (string $r) => rtrim($r, '/'), $roots));
 
@@ -54,7 +59,7 @@ class AuditEngine
         foreach ($roots as $root) {
             foreach ($this->phpFilesIn($root) as $file) {
                 foreach ($this->collector->collect($file, $root, $matchTarget) as $ref) {
-                    $references[] = $this->refine($ref, $graph, $target);
+                    $references[] = $this->refine($ref, $graph, $target, $movingSet);
                 }
             }
         }
@@ -66,7 +71,7 @@ class AuditEngine
      * Positional + graph refinement: reclassify a generic reference by the role of the file it lives
      * in (migration / test / route / config), then attach owning package + cycle-risk for a move.
      */
-    private function refine(Reference $ref, ?PackageGraph $graph, Target $target): Reference
+    private function refine(Reference $ref, ?PackageGraph $graph, Target $target, ?MovingSet $movingSet): Reference
     {
         $category = $this->refineByFileRole($ref);
         $ref->category = $category;
@@ -76,17 +81,45 @@ class AuditEngine
             return $ref;
         }
 
-        $ref->package = $graph->packageForRoot($ref->root);
+        // Cycle-risk is a question about the POST-MOVE graph: after the move lands, would repointing
+        // this referrer at the new home need an upward composer edge? The referrer's post-move package
+        // is normally the package that owns its file today — BUT in an atomic cluster-move the referrer
+        // may ITSELF be a moving member (its own file relocates into the destination too). In that
+        // case its post-move package IS the destination, so a reference from one moving member to
+        // another is intra-destination, never a cross-tier edge. Only a reference whose referrer stays
+        // put (not in the set) is tier-checked against the source graph.
+        $referrerPackage = $movingSet !== null && $this->referrerIsMovingMember($ref, $movingSet)
+            ? $graph->packageForFqn((string) $ref->newFqn)
+            : $graph->packageForRoot($ref->root);
+
+        $ref->package = $referrerPackage;
         $destination = $ref->newFqn !== null ? $graph->packageForFqn($ref->newFqn) : null;
 
-        if ($ref->package !== null && $destination !== null
-            && $ref->package !== $destination
-            && $graph->reaches($destination, $ref->package)) {
-            $ref->cycleRisk = "relocating into {$destination} needs {$ref->package} → {$destination}, "
-                ."but {$destination} already reaches {$ref->package} (upward composer edge)";
+        if ($referrerPackage !== null && $destination !== null
+            && $referrerPackage !== $destination
+            && $graph->reaches($destination, $referrerPackage)) {
+            $ref->cycleRisk = "relocating into {$destination} needs {$referrerPackage} → {$destination}, "
+                ."but {$destination} already reaches {$referrerPackage} (upward composer edge)";
         }
 
         return $ref;
+    }
+
+    /**
+     * Is the file this reference lives in itself a moving member of the cluster? A file is a moving
+     * member when the symbol it declares is in the set — detected by re-reading its own declarations
+     * and asking the set. When true, the file relocates into the destination, so a reference it hosts
+     * has its POST-MOVE package resolved at the destination, not at its source root.
+     */
+    private function referrerIsMovingMember(Reference $ref, MovingSet $movingSet): bool
+    {
+        foreach ($this->declaredSymbolsIn($ref->file) as $declared) {
+            if ($movingSet->contains($declared)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** Only the generic class-load categories move by file role; the special syntactic ones stay put. */

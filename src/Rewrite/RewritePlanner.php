@@ -51,14 +51,29 @@ class RewritePlanner
         // would leave `class Widget` behind references to `Gadget` — broken code. Ticket 02 already
         // rules the rename's non-FQN cascade Tier-3 advisory, so this Tier-1 pass declines the whole
         // move rather than half-apply it. Pure relocation (basename preserved) is unaffected.
+        //
+        // The check is per moved MEMBER — a moved symbol whose OWN declaration changes basename between
+        // its matched and new FQN. Reading it off the declaration references (not the target's `value`)
+        // is what makes it correct for a namespace / atomic-cluster move too: those targets carry a
+        // *prefix* in `value` (`App\Cluster` → `Dest`), never a basename, so comparing the target
+        // strings would false-flag a pure relocation as a rename. Each member preserves its basename by
+        // construction, so a namespace / cluster move is (correctly) never flagged here.
         $unsupported = null;
-        if ($this->basenameOf($report->target->value) !== $this->basenameOf((string) $report->target->newFqn)) {
-            $unsupported = sprintf(
-                'basename rename (%s → %s): the class-declaration token is not in the audit finding-set — '
-                .'deferred to the guided rename path (ticket 02: the rename cascade is Tier-3 advisory).',
-                $this->basenameOf($report->target->value),
-                $this->basenameOf((string) $report->target->newFqn),
-            );
+        foreach ($report->references() as $ref) {
+            if ($ref->category !== ReferenceCategory::NamespaceDeclaration || $ref->newFqn === null) {
+                continue;
+            }
+            $oldBase = $this->basenameOf(Target::normalize($ref->matchedFqn));
+            $newBase = $this->basenameOf(Target::normalize($ref->newFqn));
+            if ($oldBase !== $newBase) {
+                $unsupported = sprintf(
+                    'basename rename (%s → %s): the class-declaration token is not in the audit finding-set — '
+                    .'deferred to the guided rename path (ticket 02: the rename cascade is Tier-3 advisory).',
+                    $oldBase,
+                    $newBase,
+                );
+                break;
+            }
         }
 
         // File-context for the no-op safety check below. A short-name reference is a safe no-op ONLY
@@ -105,7 +120,7 @@ class RewritePlanner
             // 'noop' contributes nothing — the import repoint already covers it.
         }
 
-        return new RewritePlan($report->target, $edits, $skips, $this->physicalMove($report), $unsupported);
+        return new RewritePlan($report->target, $edits, $skips, $this->physicalMoves($report), $unsupported);
     }
 
     /**
@@ -225,35 +240,52 @@ class RewritePlanner
     }
 
     /**
-     * The tool-owned physical move of the moved symbol's own file — derived from the namespace
-     * declaration reference (whose file *is* the moved file) plus the PSR-4 map. Null when the audit
-     * caught no own-declaration (references-only move) or the destination isn't PSR-4-resolvable.
+     * The tool-owned physical moves — ONE per moving member (each file whose own `namespace X;` line was
+     * recorded as a NamespaceDeclaration reference *is* a moved file). A lone relocation yields exactly
+     * one; an atomic cluster yields one per sibling, so the whole set relocates together.
      *
-     * The destination root is found by {@see Psr4Resolver::resolve()} across ALL named roots, not by
+     * Each destination root is found by {@see Psr4Resolver::resolve()} across ALL named roots, not by
      * assuming the new FQN lives under the source root (ticket 14): the whole point of a cross-repo
      * promotion is that `Vendor\Pkg\Foo` resolves into the *package* root, a different tree than the
      * `App\` source root. Once both the source file's repo and the destination path's repo are known,
      * {@see GitRoot} decides the relocation mode (same-repo `git mv` vs. two-repo copy+delete) — the
      * single-repo path stays byte-for-byte identical because same-repo resolution yields the same
      * `to`/`toRelative` it always did.
+     *
+     * @return list<PhysicalMove>
      */
-    private function physicalMove(AuditReport $report): ?PhysicalMove
+    private function physicalMoves(AuditReport $report): array
     {
         if ($this->psr4 === null) {
-            return null;
+            return [];
         }
 
-        $declaration = null;
+        // ONE physical move per moving member — every file whose OWN declaration matched the target
+        // (its `namespace X;` line was recorded as a NamespaceDeclaration reference). A single-symbol
+        // relocation catches exactly one; an atomic cluster catches one per sibling, so the whole
+        // cohesive set relocates together instead of half-moving. Deduplicated by source file.
+        $moves = [];
+        $seen = [];
         foreach ($report->references() as $ref) {
-            if ($ref->category === ReferenceCategory::NamespaceDeclaration && $ref->newFqn !== null) {
-                $declaration = $ref;
-                break;
+            if ($ref->category !== ReferenceCategory::NamespaceDeclaration || $ref->newFqn === null) {
+                continue;
+            }
+            if (isset($seen[$ref->file])) {
+                continue;
+            }
+            $seen[$ref->file] = true;
+            $move = $this->physicalMoveFor($ref);
+            if ($move !== null) {
+                $moves[] = $move;
             }
         }
-        if ($declaration === null) {
-            return null;
-        }
 
+        return $moves;
+    }
+
+    /** Resolve the tool-owned physical move for ONE moved-symbol declaration reference. */
+    private function physicalMoveFor(Reference $declaration): ?PhysicalMove
+    {
         $old = Target::normalize($declaration->matchedFqn);
         $new = Target::normalize((string) $declaration->newFqn);
 
