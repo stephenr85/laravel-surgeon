@@ -4,6 +4,7 @@ namespace Rushing\Surgeon\Rewrite;
 
 use Illuminate\Support\Facades\Process;
 use Rushing\Surgeon\Audit\PackageGraph;
+use Rushing\Surgeon\Lint\LintOrchestrator;
 
 /**
  * The deterministic post-write gate (ticket 03, decision 4) — the tool's own, blocking guarantee run
@@ -18,8 +19,13 @@ use Rushing\Surgeon\Audit\PackageGraph;
  *  3. **topology cycle-guard** — `laravel-package-topology`'s declared-topology assertion, catching an
  *     upward composer edge a relocation introduced. Guarded: skipped where the guard isn't installed
  *     in the touched roots (it runs as a real gate in an app/package that composes it).
- *
- * Stage 4 (cross-stack lint) is ticket 12's addition and is intentionally NOT wired here.
+ *  4. **cross-stack lint** (ticket 12) — the {@see LintOrchestrator} run in **check-mode** over the
+ *     touched roots (Pint / eslint / …, sniff-with-override), catching style drift the write introduced.
+ *     Check-mode ONLY: the gate never silently reformats inside a `move`/`canonicalize` (that would blur
+ *     what the write-op changed vs what the formatter changed — poison for the touch-manifest review).
+ *     `surgeon:lint --fix` is the separate reformat write-op. **Opt-in** (`$runLint`, default off): lint
+ *     is composable into the gate, not forced into every move — a relocation that leaves style clean
+ *     shouldn't fail on a repo's *pre-existing* drift. A skip (no stack applies) is recorded honestly.
  *
  * Tests (the filtered, consumer-run set) are explicitly NOT part of this gate — ticket 03 keeps them
  * emitted-not-run so the tool never owns DB isolation as a blocking step.
@@ -29,6 +35,8 @@ class DeterministicGate
     public function __construct(
         public bool $runComposer = true,
         public bool $runTopology = true,
+        public bool $runLint = false,
+        private ?LintOrchestrator $lint = null,
     ) {}
 
     /**
@@ -50,7 +58,46 @@ class DeterministicGate
             $this->topology($roots, $result);
         }
 
+        if ($this->runLint) {
+            $this->lint($roots, $result);
+        }
+
         return $result;
+    }
+
+    /**
+     * Stage 4 — cross-stack lint in check-mode over the touched roots (ticket 12). Fails the gate on any
+     * violation; skips honestly when no stack applies (or a binary is absent). Never reformats — the gate
+     * is check-only so the touch-manifest stays honest about what the write-op (not a formatter) changed.
+     *
+     * @param  list<string>  $roots
+     */
+    private function lint(array $roots, GateResult $result): void
+    {
+        $orchestrator = $this->lint ?? new LintOrchestrator;
+        $run = $orchestrator->check($roots);
+
+        if ($run->results === []) {
+            $result->record('cross-stack lint', 'skip', 'no lint stack applies to the touched roots');
+
+            return;
+        }
+
+        $violations = $run->violations();
+        if ($violations !== []) {
+            $lines = array_map(
+                fn ($r) => $r->stack.' @ '.basename($r->root).': '.$r->violations.' violation(s)',
+                $violations,
+            );
+            $result->record('cross-stack lint', 'fail', implode(' | ', $lines).' (run: surgeon:lint --fix)');
+
+            return;
+        }
+
+        $ran = array_values(array_filter($run->results, fn ($r) => ! $r->isSkipped()));
+        $ran === []
+            ? $result->record('cross-stack lint', 'skip', 'stacks matched but all skipped (binaries absent)')
+            : $result->record('cross-stack lint', 'pass', count($ran).' stack-root check(s) clean');
     }
 
     /** @param list<string> $files */
