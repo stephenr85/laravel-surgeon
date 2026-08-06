@@ -1,0 +1,35 @@
+# rushing/laravel-surgeon
+
+A **deterministic code-insight + operation engine** for Laravel package estates.
+
+*Doctor diagnoses; the surgeon operates.* This package builds on the `rushing/laravel-doctor`
+conformance registry and adds the **fix half** — where a mal-adaptation `Finding` nominates a
+precise, reversible `surgeon:*` operation. Its acceptance proof (not its scope ceiling) is
+cross-tier **FQN-relocation**: collapsing the grep-and-repoint hand-work of a real move into an
+**audited, verified, mechanical pass** plus a structured handoff to an agent for the judgment tail.
+
+## Architecture (the load-bearing decisions)
+
+- **Substrate: `nikic/php-parser`**, not Rector. Rewrite = **AST-locate + byte-offset splice**
+  (format preserved by construction); the format-preserving printer is reserved for structural
+  Tier-2 ops. The reusable find-half scanner is graphine's `Rushing\Graphine\Testing\SeamGuard`.
+- **Two commands (planned):** `surgeon:audit` (read-only, no git precondition) and `surgeon:move`
+  (writer; `--apply` refuses raw declared input, applying only an explicit *resolved* operation set).
+- **Verification:** the `rushing/php-package-topology` cycle-guard runs as a post-rewrite gate.
+- **Tiering:** foundation vendor — no `splicewire/*` / `schemastud/*` deps. It ships artisan
+  commands, so any tier that composes it inherits the `surgeon:*` family.
+
+## Status
+
+Scaffold only. The only live command today is `surgeon:ping` — a smoke check that the provider
+registers and the AST substrate (nikic + SeamGuard) resolves. Audit, move-spec, and the golden-replay
+acceptance harness land as their tickets graduate. See the effort map in the consuming app at
+`.scratch/refactor-tooling/MAP.md`.
+
+## Local dev
+
+```bash
+composer install
+composer test   # pest
+composer pint   # style
+```

@@ -1,0 +1,94 @@
+{
+    "name": "rushing/laravel-surgeon",
+    "description": "Deterministic code-insight + operation engine for Laravel package estates: an audit-first refactor tool built on nikic/php-parser (via graphine's SeamGuard AST scanner) that collapses an agent's hunt into a structured finding-set and applies mechanical operations (Tier-1 automated / Tier-2 guided / Tier-3 advisory), with the topology cycle-guard as post-rewrite verification. Doctor diagnoses; the surgeon operates.",
+    "keywords": ["laravel", "rushing", "refactor", "ast", "codemod", "audit", "topology", "surgeon"],
+    "type": "library",
+    "license": "proprietary",
+    "authors": [
+        {
+            "name": "Stephen Rushing",
+            "email": "stephenr85@gmail.com"
+        }
+    ],
+    "require": {
+        "php": "^8.3",
+        "illuminate/console": "^11.0|^12.0|^13.0",
+        "illuminate/support": "^11.0|^12.0|^13.0",
+        "nikic/php-parser": "^5.0",
+        "rushing/laravel-doctor": "dev-main",
+        "rushing/php-graphine": "dev-main",
+        "rushing/php-package-topology": "dev-main"
+    },
+    "require-dev": {
+        "laravel/pint": "^1.0",
+        "orchestra/testbench": "^9.0|^10.0|^11.0",
+        "pestphp/pest": "^2.0|^3.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Rushing\\Surgeon\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Rushing\\Surgeon\\Tests\\": "tests/"
+        }
+    },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../php-graphine",
+            "options": {
+                "symlink": true
+            }
+        },
+        {
+            "type": "path",
+            "url": "../php-package-topology",
+            "options": {
+                "symlink": true
+            }
+        },
+        {
+            "type": "path",
+            "url": "../laravel-doctor",
+            "options": {
+                "symlink": true
+            }
+        }
+    ],
+    "extra": {
+        "branch-alias": {
+            "dev-main": "1.0.x-dev"
+        },
+        "laravel": {
+            "providers": [
+                "Rushing\\Surgeon\\SurgeonServiceProvider"
+            ]
+        },
+        "package-topology": {
+            "mustRequire": [
+                "nikic/php-parser",
+                "rushing/laravel-doctor",
+                "rushing/php-graphine",
+                "rushing/php-package-topology"
+            ],
+            "mustNotRequire": [
+                "splicewire/*",
+                "schemastud/*"
+            ]
+        }
+    },
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        },
+        "sort-packages": true
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true,
+    "scripts": {
+        "test": "vendor/bin/pest",
+        "pint": "@php -d memory_limit=512M vendor/bin/pint"
+    }
+}

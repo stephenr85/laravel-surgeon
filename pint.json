@@ -1,0 +1,16 @@
+{
+    "exclude": [
+        "tests/Fixtures"
+    ],
+    "rules": {
+        "ordered_imports": true,
+        "constant_case": true,
+        "trailing_comma_in_multiline": true,
+        "no_trailing_comma_in_singleline": true,
+        "blank_line_after_namespace": true,
+        "blank_line_after_opening_tag": true,
+        "single_blank_line_at_eof": true,
+        "return_type_declaration": true,
+        "array_indentation": true
+    }
+}
