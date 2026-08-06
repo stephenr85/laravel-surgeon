@@ -5,6 +5,7 @@ namespace Rushing\Surgeon;
 use Illuminate\Support\ServiceProvider as BaseServiceProvider;
 use Rushing\Surgeon\Console\AuditCommand;
 use Rushing\Surgeon\Console\MoveCommand;
+use Rushing\Surgeon\Console\OverlayCommand;
 use Rushing\Surgeon\Console\PingCommand;
 use Rushing\Surgeon\Console\ReplayCommand;
 use Rushing\Surgeon\Console\TraceCommand;
@@ -19,7 +20,8 @@ use Rushing\Surgeon\Operation\NullConformanceManifest;
  * is emergent — no per-tier wiring). It registers the {@see PingCommand} smoke command, the
  * target-driven {@see TraceCommand} (ticket 05, was `surgeon:audit`), the conformance-sweep
  * {@see AuditCommand} (ticket 13 — the Finding→Operation bridge read of the doctor manifest), the
- * Tier-1 writer {@see MoveCommand} (ticket 09), and the golden-replay {@see ReplayCommand} (ticket 06).
+ * Tier-1 writer {@see MoveCommand} (ticket 09), the golden-replay {@see ReplayCommand} (ticket 06), and
+ * the co-dev-overlay operation family {@see OverlayCommand} (ticket 10 — the first non-AST writer).
  * Commands register only in console so a mere web/queue boot that has the provider installed pays nothing.
  *
  * The {@see ConformanceManifest} discovery port defaults to {@see NullConformanceManifest} (a foundation
@@ -42,6 +44,7 @@ class SurgeonServiceProvider extends BaseServiceProvider
                 AuditCommand::class,
                 MoveCommand::class,
                 ReplayCommand::class,
+                OverlayCommand::class,
             ]);
         }
     }
