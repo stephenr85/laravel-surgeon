@@ -44,6 +44,36 @@ function surgeon_rrmdir(string $dir): void
 }
 
 /**
+ * Initialise a throwaway git repo in `$dir` and commit everything currently in it — the pre-move
+ * baseline a cross-repo relocation test (ticket 14) needs on BOTH sides so rollback has a real repo to
+ * restore against. Argv-array subprocess (no shell); identity is set locally so it runs on a bare CI.
+ */
+function surgeon_git_init(string $dir): void
+{
+    foreach ([
+        ['init', '-q'],
+        ['config', 'user.email', 'surgeon@test.local'],
+        ['config', 'user.name', 'surgeon-test'],
+        ['config', 'commit.gpgsign', 'false'],
+        ['add', '-A'],
+        ['commit', '-q', '-m', 'baseline', '--no-gpg-sign'],
+    ] as $args) {
+        $process = proc_open(
+            array_merge(['git', '-C', $dir], $args),
+            [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes,
+        );
+        stream_get_contents($pipes[1]);
+        $err = stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        if (proc_close($process) !== 0) {
+            throw new RuntimeException('git '.implode(' ', $args).' failed in '.$dir.': '.$err);
+        }
+    }
+}
+
+/**
  * Stand up a minimal PSR-4 root (`App\ => src/`) with a moveable `App\Old\Widget` and a consumer
  * that imports it — the fixture the apply + physical-move tests relocate. Returns the root path.
  */

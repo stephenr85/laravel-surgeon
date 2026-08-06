@@ -18,7 +18,7 @@ class TouchManifest
     /** @var list<array{file: string, relativePath: string, original: string, updated: string}> */
     public array $writes = [];
 
-    /** @var array{from: string, to: string, fromRelative: string, toRelative: string}|null */
+    /** @var array{from: string, to: string, fromRelative: string, toRelative: string, crossRepo: bool, sourceRepo: ?string, destinationRepo: ?string}|null */
     public ?array $move = null;
 
     public function __construct(public RewritePlan $plan) {}
@@ -30,11 +30,18 @@ class TouchManifest
 
     public function recordMove(PhysicalMove $move): void
     {
+        // The `crossRepo` flag + the two repo roots ride in memory so the applier's rollback knows to
+        // reverse a two-repo copy+delete (ticket 14), and so the deterministic gate can target the
+        // destination repo. They are omitted from the persisted sidecar shape (that stays a legible
+        // relative-path operation manifest, not an execution-mode dump) — see {@see toArray()}.
         $this->move = [
             'from' => $move->from,
             'to' => $move->to,
             'fromRelative' => $move->fromRelative,
             'toRelative' => $move->toRelative,
+            'crossRepo' => $move->crossRepo,
+            'sourceRepo' => $move->sourceRepo,
+            'destinationRepo' => $move->destinationRepo,
         ];
     }
 
@@ -47,6 +54,25 @@ class TouchManifest
         }
 
         return array_values(array_unique($files));
+    }
+
+    /**
+     * The roots that hosted this operation's writes — the source roots of every spliced file plus, for
+     * a cross-repo move, the DESTINATION repo (ticket 14). The deterministic gate consumes this so
+     * `php -l`/`dump-autoload`/topology run in the destination repo where the moved class now lives,
+     * not only the source. De-duplicated; empty entries dropped.
+     *
+     * @param  list<string>  $namedRoots  the write blast-radius roots (from `--root`)
+     * @return list<string>
+     */
+    public function gateRoots(array $namedRoots): array
+    {
+        $roots = $namedRoots;
+        if ($this->move !== null && ! empty($this->move['crossRepo']) && $this->move['destinationRepo'] !== null) {
+            $roots[] = $this->move['destinationRepo'];
+        }
+
+        return array_values(array_unique(array_filter($roots, fn ($r) => $r !== null && $r !== '')));
     }
 
     /** @return array<string, mixed> the persisted sidecar shape (no byte blobs) */

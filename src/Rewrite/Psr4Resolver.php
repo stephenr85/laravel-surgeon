@@ -57,6 +57,46 @@ class Psr4Resolver
     }
 
     /**
+     * Find WHICH configured root a class belongs to (ticket 14). This is the fact a cross-repo move
+     * turns on: the moved file's *new* FQN may resolve into a **different** root than the source (the
+     * app → package promotion — the co-dev estate's most common relocation). The single-repo
+     * {@see pathFor()} resolves against one caller-named root; this scans every root the resolver was
+     * built with and returns the one whose PSR-4 map covers the FQN, so the planner can locate the
+     * destination package without the caller pre-knowing which root owns the target namespace.
+     *
+     * Ambiguity resolution mirrors PSR-4's own longest-prefix rule but *across* roots: the root whose
+     * matching prefix is the longest wins (a specific `Vendor\Pkg\` prefix beats a catch-all `App\`),
+     * so an app that also autoloads a vendor namespace can't shadow the real destination package.
+     *
+     * @return array{root: string, path: string}|null the owning root + the file's path under it
+     */
+    public function resolve(string $fqn): ?array
+    {
+        $fqn = ltrim($fqn, '\\');
+
+        $bestRoot = null;
+        $bestPrefixLength = -1;
+        foreach (array_keys($this->maps) as $root) {
+            foreach ($this->maps[$root] as $entry) {
+                $prefix = $entry['prefix'];
+                $covers = $prefix === '' || str_starts_with($fqn, $prefix);
+                if ($covers && strlen($prefix) > $bestPrefixLength) {
+                    $bestPrefixLength = strlen($prefix);
+                    $bestRoot = $root;
+                }
+            }
+        }
+
+        if ($bestRoot === null) {
+            return null;
+        }
+
+        $path = $this->pathFor($fqn, $bestRoot);
+
+        return $path === null ? null : ['root' => $bestRoot, 'path' => $path];
+    }
+
+    /**
      * @return list<array{prefix: string, dir: string}>
      */
     private function loadMap(string $root): array

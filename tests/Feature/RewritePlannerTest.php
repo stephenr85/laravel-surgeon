@@ -177,6 +177,31 @@ it('keeps an imported short name a no-op (the in-file use line repoints it)', fu
     }
 });
 
+it('resolves a new FQN to whichever root owns it (cross-root Psr4Resolver::resolve)', function () {
+    $app = surgeon_tmp('resolve-app');
+    $pkg = surgeon_tmp('resolve-pkg');
+    try {
+        surgeon_write($app.'/composer.json', json_encode(['autoload' => ['psr-4' => ['App\\' => 'app/']]]));
+        surgeon_write($pkg.'/composer.json', json_encode(['autoload' => ['psr-4' => ['Vendor\\Pkg\\' => 'src/']]]));
+
+        $resolver = new Psr4Resolver([$app, $pkg]);
+
+        // The package FQN resolves into the PACKAGE root, not the app root — the cross-repo fact.
+        $pkgHit = $resolver->resolve('Vendor\\Pkg\\Widget');
+        expect($pkgHit['root'])->toBe($pkg)->and($pkgHit['path'])->toBe($pkg.'/src/Widget.php');
+
+        // An app FQN resolves back into the app root.
+        $appHit = $resolver->resolve('App\\Scratch\\Widget');
+        expect($appHit['root'])->toBe($app)->and($appHit['path'])->toBe($app.'/app/Scratch/Widget.php');
+
+        // A namespace no root autoloads resolves nowhere.
+        expect($resolver->resolve('Nobody\\Owns\\This'))->toBeNull();
+    } finally {
+        surgeon_rrmdir($app);
+        surgeon_rrmdir($pkg);
+    }
+});
+
 it('derives the physical move from PSR-4 when the moved file is autoloadable', function () {
     $root = surgeon_psr4_root('planmove');
 

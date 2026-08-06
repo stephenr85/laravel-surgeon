@@ -227,7 +227,15 @@ class RewritePlanner
     /**
      * The tool-owned physical move of the moved symbol's own file — derived from the namespace
      * declaration reference (whose file *is* the moved file) plus the PSR-4 map. Null when the audit
-     * caught no own-declaration (references-only move) or the source isn't PSR-4-resolvable.
+     * caught no own-declaration (references-only move) or the destination isn't PSR-4-resolvable.
+     *
+     * The destination root is found by {@see Psr4Resolver::resolve()} across ALL named roots, not by
+     * assuming the new FQN lives under the source root (ticket 14): the whole point of a cross-repo
+     * promotion is that `Vendor\Pkg\Foo` resolves into the *package* root, a different tree than the
+     * `App\` source root. Once both the source file's repo and the destination path's repo are known,
+     * {@see GitRoot} decides the relocation mode (same-repo `git mv` vs. two-repo copy+delete) — the
+     * single-repo path stays byte-for-byte identical because same-repo resolution yields the same
+     * `to`/`toRelative` it always did.
      */
     private function physicalMove(AuditReport $report): ?PhysicalMove
     {
@@ -248,20 +256,39 @@ class RewritePlanner
 
         $old = Target::normalize($declaration->matchedFqn);
         $new = Target::normalize((string) $declaration->newFqn);
-        $root = $declaration->root;
 
-        $to = $this->psr4->pathFor($new, $root);
-        if ($to === null) {
-            return null; // non-PSR-4 ancillary destination — audit-reported, not tool-moved.
+        // Locate the destination across every root — the new FQN may belong to a package root that is
+        // NOT the source root (the cross-repo case). Fall back to same-root resolution so a new FQN
+        // whose namespace no root autoloads still resolves under the source root exactly as before.
+        $resolved = $this->psr4->resolve($new);
+        if ($resolved === null) {
+            $sameRootPath = $this->psr4->pathFor($new, $declaration->root);
+            if ($sameRootPath === null) {
+                return null; // non-PSR-4 ancillary destination — audit-reported, not tool-moved.
+            }
+            $resolved = ['root' => $declaration->root, 'path' => $sameRootPath];
         }
+
+        $to = $resolved['path'];
+        $destRoot = $resolved['root'];
+
+        // Decide the relocation mode by the two files' real git repos (ticket 14). The source file
+        // exists on disk; the destination file does not yet, so we ask which repo its *directory* (or
+        // nearest existing ancestor) lives in — the PSR-4 destination dir under the package root.
+        $sourceRepo = GitRoot::of($declaration->file);
+        $destinationRepo = GitRoot::of($to);
+        $crossRepo = $sourceRepo !== null && $destinationRepo !== null && $sourceRepo !== $destinationRepo;
 
         return new PhysicalMove(
             from: $declaration->file,
             to: $to,
             fromRelative: $declaration->relativePath,
-            toRelative: str_starts_with($to, $root.'/') ? substr($to, strlen($root) + 1) : $to,
+            toRelative: str_starts_with($to, $destRoot.'/') ? substr($to, strlen($destRoot) + 1) : $to,
             oldFqn: $old,
             newFqn: $new,
+            crossRepo: $crossRepo,
+            sourceRepo: $sourceRepo,
+            destinationRepo: $destinationRepo,
         );
     }
 

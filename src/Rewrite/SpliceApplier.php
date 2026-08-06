@@ -2,6 +2,8 @@
 
 namespace Rushing\Surgeon\Rewrite;
 
+use Rushing\Surgeon\Console\MoveCommand;
+
 /**
  * THE TIER-1 WRITER — applies a resolved {@see RewritePlan} to disk by byte-splice, then performs the
  * tool-owned physical move. It is the one component in the tool that mutates source, and it does so
@@ -78,7 +80,7 @@ class SpliceApplier
 
         // Phase 3 — the tool-owned physical move (the moved file was just spliced in place, then relocates).
         if ($plan->move !== null) {
-            $this->relocate($plan->move->from, $plan->move->to);
+            $this->relocate($plan->move);
             $manifest->recordMove($plan->move);
         }
 
@@ -89,11 +91,17 @@ class SpliceApplier
      * Manifest-scoped rollback: reverse the physical move, then restore every tool-written file to its
      * pre-tool bytes. Restores ONLY what the manifest records — pre-existing dirt elsewhere is never
      * touched (the `--allow-dirty` guarantee).
+     *
+     * The moved file's SOURCE bytes are always recoverable because its in-place namespace splice was
+     * recorded in {@see TouchManifest::$writes} (with `original` = the pre-tool source), so the second
+     * loop below rewrites the source file back to its exact pre-move content after the reverse-relocate
+     * puts it back at its old path. This makes the cross-repo rollback safe with no lost bytes even if
+     * the forward pass half-completed (see {@see reverseRelocate()}).
      */
     public function rollback(TouchManifest $manifest): void
     {
         if ($manifest->move !== null) {
-            $this->relocate($manifest->move['to'], $manifest->move['from']);
+            $this->reverseRelocate($manifest->move);
         }
 
         foreach ($manifest->writes as $write) {
@@ -108,17 +116,91 @@ class SpliceApplier
         }
     }
 
-    private function relocate(string $from, string $to): void
+    /**
+     * Perform the tool-owned physical relocation (ticket 09 same-repo, ticket 14 cross-repo). The mode
+     * is on the {@see PhysicalMove} itself, derived by the planner — the applier just executes it.
+     *
+     *  - **Same repo** — an in-repo `rename()` (a fast, atomic move within one filesystem/repo). This is
+     *    the historical path, unchanged: a same-repo move is byte-for-byte what ticket 09 did.
+     *  - **Cross repo** — a two-repo copy+delete: create the (already namespace-spliced) file at its
+     *    destination path in the OTHER repo, then delete it from the source repo. The ORDER is
+     *    load-bearing for reversibility: **write destination first, delete source second**. If the
+     *    source delete fails, the file exists in both places — rollback still restores each side
+     *    cleanly (delete the destination, rewrite the source). We never leave a window where the file
+     *    exists in NEITHER repo. Git staging of the two paths is a separate best-effort review
+     *    affordance ({@see MoveCommand::stageWithGit()}), scoped to the exact
+     *    moved paths — never a blind `git add -A` that would sweep unrelated dirt.
+     */
+    private function relocate(PhysicalMove $move): void
     {
+        if ($move->from === $move->to) {
+            return;
+        }
+
+        if (! $move->crossRepo) {
+            $this->ensureDir(dirname($move->to));
+            if (! @rename($move->from, $move->to)) {
+                throw new \RuntimeException("cannot move {$move->from} → {$move->to}.");
+            }
+
+            return;
+        }
+
+        // Cross-repo: copy the current (spliced) source bytes into the destination repo, THEN remove
+        // the source. Reading + writing bytes (not rename) is required — rename cannot cross a git
+        // boundary and, in a co-dev overlay, the two repos may even be different filesystems.
+        $bytes = @file_get_contents($move->from);
+        if ($bytes === false) {
+            throw new \RuntimeException("cannot read {$move->from} to relocate it cross-repo.");
+        }
+        $this->ensureDir(dirname($move->to));
+        $this->write($move->to, $bytes);
+
+        if (! @unlink($move->from)) {
+            throw new \RuntimeException("wrote {$move->to} but cannot remove source {$move->from} — rollback will reconcile.");
+        }
+    }
+
+    /**
+     * Reverse a physical relocation for rollback. Same-repo reverses the `rename()`. Cross-repo puts the
+     * file back at the source path (the second rollback loop then rewrites its pre-tool bytes) and
+     * removes the destination copy — restoring BOTH repos to exactly their pre-move state. Each fs op is
+     * defensive (best-effort on the destination delete): a partially-applied forward pass — file in both
+     * repos, or only in the source — still lands back at a clean pre-move tree.
+     */
+    private function reverseRelocate(array $move): void
+    {
+        $from = $move['from'];
+        $to = $move['to'];
         if ($from === $to) {
             return;
         }
-        $dir = dirname($to);
+
+        if (empty($move['crossRepo'])) {
+            $this->ensureDir(dirname($from));
+            if (is_file($to) && ! @rename($to, $from)) {
+                throw new \RuntimeException("cannot roll back move {$to} → {$from}.");
+            }
+
+            return;
+        }
+
+        // Cross-repo reverse: restore the source path (bytes are corrected by the writes loop that
+        // follows), then delete the destination copy so the destination repo returns to pristine.
+        $this->ensureDir(dirname($from));
+        if (! is_file($from)) {
+            $bytes = is_file($to) ? (string) @file_get_contents($to) : '';
+            $this->write($from, $bytes);
+        }
+        if (is_file($to)) {
+            @unlink($to);
+        }
+    }
+
+    private function ensureDir(string $dir): void
+    {
         if (! is_dir($dir) && ! @mkdir($dir, 0755, true) && ! is_dir($dir)) {
             throw new \RuntimeException("cannot create destination directory {$dir}.");
-        }
-        if (! @rename($from, $to)) {
-            throw new \RuntimeException("cannot move {$from} → {$to}.");
         }
     }
 }

@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Process;
 use Rushing\Surgeon\Audit\AuditReport;
 use Rushing\Surgeon\Audit\ReferenceCategory;
 use Rushing\Surgeon\Operation\RelocationOperation;
+use Rushing\Surgeon\Rewrite\DestinationDepAdvisor;
 use Rushing\Surgeon\Rewrite\DeterministicGate;
 use Rushing\Surgeon\Rewrite\FindingSetLoader;
 use Rushing\Surgeon\Rewrite\PlannedEdit;
@@ -141,8 +142,10 @@ class MoveCommand extends Command
         }
 
         if (! $this->option('no-verify')) {
+            // The gate must run in the DESTINATION repo too for a cross-repo move (ticket 14) — php -l
+            // on the moved file at its new home, dump-autoload/topology where the class now lives.
             $gate = (new DeterministicGate(runComposer: ! $this->option('no-composer')))
-                ->run($manifest->touchedFiles(), $roots);
+                ->run($manifest->touchedFiles(), $manifest->gateRoots($roots));
 
             foreach ($gate->stages as $stage) {
                 $this->line('  '.$this->gateTag($stage['status'])." {$stage['stage']} — {$stage['detail']}");
@@ -165,9 +168,35 @@ class MoveCommand extends Command
         $this->line("  touch-manifest → {$manifestPath}");
         $this->line('  <fg=yellow>Not committed.</> Review the staged diff; the manifest is the scoped-undo surface.');
         $this->renderSkips($plan);
+        $this->renderDestinationDepAdvisory($plan);
         $this->renderDerivedTests($report);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Tier-3 composer-dep advisory (ticket 14) — after a cross-repo promotion, flag any vendor the moved
+     * file imports that the destination package does not `require`. The exact tail that bit the manual
+     * `SurgeonMcpServer` promotion (laravel/mcp + mcp-registry added by hand). We flag, never edit
+     * composer: choosing the constraint is judgment — the deterministic/agentic seam, upheld.
+     */
+    private function renderDestinationDepAdvisory(RewritePlan $plan): void
+    {
+        if ($plan->move === null || ! $plan->move->crossRepo || $plan->move->destinationRepo === null) {
+            return;
+        }
+
+        $advisories = (new DestinationDepAdvisor)->advise($plan->move->to, $plan->move->destinationRepo);
+        if ($advisories === []) {
+            return;
+        }
+
+        $this->line('');
+        $this->line('  <fg=yellow>Tier-3 advisory — destination composer deps ('.count($advisories).'):</>');
+        foreach ($advisories as $line) {
+            $this->line('    <fg=gray>'.$line.'</>');
+        }
+        $this->line('    <fg=gray>(surgeon does not edit composer.json — add the deps and dump-autoload before committing.)</>');
     }
 
     // --- rendering ---------------------------------------------------------------------------------
@@ -271,7 +300,12 @@ class MoveCommand extends Command
         $allowed = array_values(array_filter($plan->edits, fn (PlannedEdit $e) => $under($e->file)));
         $excluded = count($plan->edits) - count($allowed);
 
-        $move = ($plan->move !== null && $under($plan->move->from)) ? $plan->move : null;
+        // Both ends of a physical move must fall inside the named blast radius. For a same-repo move
+        // that is one root; for a cross-repo promotion (ticket 14) the destination lives under a
+        // DIFFERENT named root (the package) — so the writer only honours it when the operator named
+        // *both* the source and destination roots (`--root=<app> --root=<pkg>`). Naming only one refuses
+        // the relocation rather than writing into an unauthorized tree.
+        $move = ($plan->move !== null && $under($plan->move->from) && $under($plan->move->to)) ? $plan->move : null;
 
         return [new RewritePlan($plan->target, $allowed, $plan->skips, $move, $plan->unsupported), $excluded];
     }
