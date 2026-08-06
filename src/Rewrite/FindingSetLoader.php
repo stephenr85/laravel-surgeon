@@ -9,7 +9,7 @@ use Rushing\Surgeon\Audit\Target;
 use Rushing\Surgeon\Audit\TargetKind;
 
 /**
- * Rehydrates a `surgeon:audit --out` finding-set (JSON) back into an {@see AuditReport} — the
+ * Rehydrates a `surgeon:trace --out` finding-set (JSON) back into an {@see AuditReport} — the
  * concrete mechanism behind ticket 03's separation-of-insight-from-execution: `surgeon:move` applies
  * an *explicit, resolved operation set written to disk*, and NEVER re-audits or infers. The audit is
  * the only thing that produces this file; the mover only ever consumes it.

@@ -6,12 +6,11 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Process;
 use Rushing\Surgeon\Audit\AuditReport;
 use Rushing\Surgeon\Audit\ReferenceCategory;
+use Rushing\Surgeon\Operation\RelocationOperation;
 use Rushing\Surgeon\Rewrite\DeterministicGate;
 use Rushing\Surgeon\Rewrite\FindingSetLoader;
 use Rushing\Surgeon\Rewrite\PlannedEdit;
-use Rushing\Surgeon\Rewrite\Psr4Resolver;
 use Rushing\Surgeon\Rewrite\RewritePlan;
-use Rushing\Surgeon\Rewrite\RewritePlanner;
 use Rushing\Surgeon\Rewrite\SpliceApplier;
 use Rushing\Surgeon\Rewrite\TouchManifest;
 
@@ -19,7 +18,7 @@ use Rushing\Surgeon\Rewrite\TouchManifest;
  * `surgeon:move` — the Tier-1 WRITER (ticket 09), where the first fully-deterministic operation
  * (FQN-relocation) actually mutates source, under ticket 03's whole safety contract:
  *
- *  - **Resolved-set only, no inference.** It applies a `surgeon:audit --out` finding-set (`--from`);
+ *  - **Resolved-set only, no inference.** It applies a `surgeon:trace --out` finding-set (`--from`);
  *    it never re-audits or infers intent. Insight and execution are separated by construction.
  *  - **Preview by default.** Without `--apply` it prints the plan and writes nothing.
  *  - **Named blast radius.** `--root` names which trees a write may touch; edits outside are refused
@@ -36,7 +35,7 @@ use Rushing\Surgeon\Rewrite\TouchManifest;
 class MoveCommand extends Command
 {
     protected $signature = 'surgeon:move
-        {--from= : Path to a surgeon:audit --out finding-set — the resolved operation set to apply}
+        {--from= : Path to a surgeon:trace --out finding-set — the resolved operation set to apply}
         {--apply : Write the changes (default: preview only, no writes)}
         {--root=* : Roots this move may touch; edits outside are refused (defaults to the finding-set roots)}
         {--allow-dirty : Proceed even if a --root working tree is dirty (recovery stays manifest-scoped)}
@@ -72,7 +71,8 @@ class MoveCommand extends Command
             return self::INVALID;
         }
 
-        $plan = (new RewritePlanner(new Psr4Resolver($roots)))->plan($report);
+        $operation = new RelocationOperation($roots);
+        $plan = $operation->plan($report);
         [$plan, $excluded] = $this->restrictToRoots($plan, $roots);
 
         if ($loaded['unresolved'] > 0) {
@@ -102,7 +102,7 @@ class MoveCommand extends Command
         }
 
         return $this->option('apply')
-            ? $this->apply($plan, $report, $roots)
+            ? $this->apply($plan, $report, $roots, $operation)
             : $this->preview($plan, $report);
     }
 
@@ -118,7 +118,7 @@ class MoveCommand extends Command
     }
 
     /** @param list<string> $roots */
-    private function apply(RewritePlan $plan, AuditReport $report, array $roots): int
+    private function apply(RewritePlan $plan, AuditReport $report, array $roots, RelocationOperation $operation): int
     {
         if (! $this->option('allow-dirty')) {
             $dirty = $this->firstDirtyRoot($roots);
@@ -133,7 +133,7 @@ class MoveCommand extends Command
 
         $applier = new SpliceApplier;
         try {
-            $manifest = $applier->apply($plan);
+            $manifest = $operation->apply($plan, $applier);
         } catch (\RuntimeException $e) {
             $this->error('apply aborted before any write: '.$e->getMessage());
 

@@ -118,7 +118,7 @@ class ReplayReport
     }
 
     /**
-     * Project into doctor's `Finding` vocabulary — the same channel `surgeon:audit` reports through
+     * Project into doctor's `Finding` vocabulary — the same channel `surgeon:trace` reports through
      * (ticket 07 grounding). One Fail per miss-bearing replay, a Warn carrying the over-reach, and a
      * clean Pass when the audit reproduced the campaign exactly.
      *

@@ -104,7 +104,7 @@ class AuditReport
     public function toDoctorFindings(): array
     {
         $findings = [];
-        $check = 'surgeon:audit '.$this->target->value;
+        $check = 'surgeon:trace '.$this->target->value;
 
         if ($this->isEmpty()) {
             return [Finding::pass($check, 'No touch-points found across '.count($this->roots).' root(s).')];

@@ -4,7 +4,7 @@ use Illuminate\Console\Command;
 use Rushing\Surgeon\Audit\AuditEngine;
 use Rushing\Surgeon\Audit\Target;
 
-/** Produce a resolved finding-set on disk, exactly as `surgeon:audit --out` would. */
+/** Produce a resolved finding-set on disk, exactly as `surgeon:trace --out` would. */
 function writeFindingSet(string $root, string $old, string $new): string
 {
     $report = (new AuditEngine)->audit([$root], Target::relocatingTo($old, $new));

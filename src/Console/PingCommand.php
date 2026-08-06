@@ -10,7 +10,7 @@ use Rushing\Graphine\Testing\SeamGuard;
  * A trivial end-to-end smoke command proving the provider + command registration work from any
  * host that composes the package — and that the two load-bearing substrate deps (graphine's
  * {@see SeamGuard} and nikic/php-parser) resolve and are usable. It performs no refactor; it is the
- * "is the surgeon scrubbed in?" check. Real operations (`surgeon:audit`, `surgeon:move`) land later.
+ * "is the surgeon scrubbed in?" check. Real operations (`surgeon:trace`, `surgeon:audit`, `surgeon:move`) land later.
  */
 class PingCommand extends Command
 {

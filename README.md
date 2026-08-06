@@ -13,7 +13,9 @@ cross-tier **FQN-relocation**: collapsing the grep-and-repoint hand-work of a re
 - **Substrate: `nikic/php-parser`**, not Rector. Rewrite = **AST-locate + byte-offset splice**
   (format preserved by construction); the format-preserving printer is reserved for structural
   Tier-2 ops. The reusable find-half scanner is graphine's `Rushing\Graphine\Testing\SeamGuard`.
-- **Two commands (planned):** `surgeon:audit` (read-only, no git precondition) and `surgeon:move`
+- **Commands:** `surgeon:trace` (target-driven, read-only reference hunt / relocation pre-pass),
+  `surgeon:audit` (conformance sweep over the registered doctor manifest — findings + the deterministic
+  operations that fix them), and `surgeon:move`
   (writer; `--apply` refuses raw declared input, applying only an explicit *resolved* operation set).
 - **Verification:** the `rushing/php-package-topology` cycle-guard runs as a post-rewrite gate.
 - **Tiering:** foundation vendor — no `splicewire/*` / `schemastud/*` deps. It ships artisan
