@@ -3,7 +3,7 @@
     "description": "Deterministic code-insight + operation engine for Laravel package estates: an audit-first refactor tool built on nikic/php-parser (via graphine's SeamGuard AST scanner) that collapses an agent's hunt into a structured finding-set and applies mechanical operations (Tier-1 automated / Tier-2 guided / Tier-3 advisory), with the topology cycle-guard as post-rewrite verification. Doctor diagnoses; the surgeon operates.",
     "keywords": ["laravel", "rushing", "refactor", "ast", "codemod", "audit", "topology", "surgeon"],
     "type": "library",
-    "license": "proprietary",
+    "license": "MIT",
     "authors": [
         {
             "name": "Stephen Rushing",
