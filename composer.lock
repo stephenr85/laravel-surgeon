@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "b381655d2d10ca368492adf65df9d62b",
+    "content-hash": "c3b2eb15582c29ddb9294da28ad96b6f",
     "packages": [
         {
             "name": "brick/math",
@@ -3301,7 +3301,7 @@
             "dist": {
                 "type": "path",
                 "url": "../php-package-topology",
-                "reference": "3fe12b79498b644ff2a4074cdb2a02083cf2ac52"
+                "reference": "38d3b73f634244f8a9bc6f0329b33d3eeaab9f03"
             },
             "require": {
                 "php": "^8.3",
@@ -3354,6 +3354,70 @@
                 "monorepo",
                 "substrate",
                 "topology"
+            ],
+            "transport-options": {
+                "symlink": true,
+                "relative": true
+            }
+        },
+        {
+            "name": "rushing/php-popcorn",
+            "version": "dev-main",
+            "dist": {
+                "type": "path",
+                "url": "../php-popcorn",
+                "reference": "8e64cb5f0b08886f8c629ccaa4884226fc6e1791"
+            },
+            "require": {
+                "php": "^8.3",
+                "symfony/finder": "^6.0|^7.0|^8.0"
+            },
+            "require-dev": {
+                "laravel/pint": "^1.0",
+                "pestphp/pest": "^3.0"
+            },
+            "type": "library",
+            "extra": {
+                "package-topology": {
+                    "mustNotRequire": [
+                        "illuminate/*"
+                    ]
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Rushing\\Popcorn\\": "src/"
+                }
+            },
+            "autoload-dev": {
+                "psr-4": {
+                    "Rushing\\Popcorn\\Tests\\": "tests/"
+                }
+            },
+            "scripts": {
+                "pint": [
+                    "@php -d memory_limit=512M vendor/bin/pint"
+                ],
+                "test": [
+                    "@php vendor/bin/pest"
+                ]
+            },
+            "license": [
+                "proprietary"
+            ],
+            "authors": [
+                {
+                    "name": "Stephen Rushing",
+                    "email": "stephenr85@gmail.com"
+                }
+            ],
+            "description": "Framework-free core for transport-agnostic invocable capabilities and self-validating strategy ladders — the invocable kernel behind rushing/laravel-popcorn.",
+            "keywords": [
+                "binding",
+                "capability",
+                "invocable",
+                "registry",
+                "strategy"
             ],
             "transport-options": {
                 "symlink": true,
@@ -8711,7 +8775,7 @@
             "dist": {
                 "type": "path",
                 "url": "../laravel-mcp-registry",
-                "reference": "40b9c79f510888c70dabf2a07f642174e058556d"
+                "reference": "27acb9adac7613f26dfbf565f56616275526b36c"
             },
             "require": {
                 "illuminate/console": "^11.0|^12.0|^13.0",
@@ -8719,7 +8783,7 @@
                 "illuminate/support": "^11.0|^12.0|^13.0",
                 "laravel/mcp": "^0.8",
                 "php": "^8.2",
-                "symfony/console": "^6.0|^7.0"
+                "symfony/console": "^6.0|^7.0|^8.0"
             },
             "require-dev": {
                 "laravel/pint": "^1.0",
@@ -10156,7 +10220,8 @@
         "rushing/laravel-doctor": 20,
         "rushing/laravel-mcp-registry": 20,
         "rushing/php-graphine": 20,
-        "rushing/php-package-topology": 20
+        "rushing/php-package-topology": 20,
+        "rushing/php-popcorn": 20
     },
     "prefer-stable": true,
     "prefer-lowest": false,

@@ -17,7 +17,8 @@
         "nikic/php-parser": "^5.0",
         "rushing/laravel-doctor": "dev-main",
         "rushing/php-graphine": "dev-main",
-        "rushing/php-package-topology": "dev-main"
+        "rushing/php-package-topology": "dev-main",
+        "rushing/php-popcorn": "dev-main"
     },
     "require-dev": {
         "laravel/mcp": "^0.8",
@@ -68,6 +69,13 @@
             "options": {
                 "symlink": true
             }
+        },
+        {
+            "type": "path",
+            "url": "../php-popcorn",
+            "options": {
+                "symlink": true
+            }
         }
     ],
     "extra": {
@@ -84,7 +92,8 @@
                 "nikic/php-parser",
                 "rushing/laravel-doctor",
                 "rushing/php-graphine",
-                "rushing/php-package-topology"
+                "rushing/php-package-topology",
+                "rushing/php-popcorn"
             ],
             "mustNotRequire": [
                 "splicewire/*",
