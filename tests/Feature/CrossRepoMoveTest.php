@@ -226,6 +226,55 @@ it('does NOT flag a dependency the destination already requires', function () {
     }
 });
 
+it('resolves a required package real PSR-4 root from installed.json (not the Studly-of-vendor guess)', function () {
+    $repos = surgeon_two_repos('installed-psr4');
+
+    try {
+        // guzzlehttp/guzzle autoloads GuzzleHttp\ — Studly(guzzlehttp) would wrongly guess "Guzzlehttp"
+        // and FALSE-flag the import. Reading composer's installed.json resolves the real root, so a
+        // GuzzleHttp\Client import against a required guzzlehttp/guzzle must NOT advise.
+        surgeon_write($repos['pkg'].'/composer.json', json_encode([
+            'name' => 'vendor/pkg',
+            'require' => ['guzzlehttp/guzzle' => '^7.0'],
+            'autoload' => ['psr-4' => ['Vendor\\Pkg\\' => 'src/']],
+        ], JSON_PRETTY_PRINT));
+        surgeon_write($repos['pkg'].'/vendor/composer/installed.json', json_encode([
+            'packages' => [
+                ['name' => 'guzzlehttp/guzzle', 'autoload' => ['psr-4' => ['GuzzleHttp\\' => 'src/']]],
+            ],
+        ], JSON_PRETTY_PRINT));
+        surgeon_write($repos['pkg'].'/src/Widget.php', "<?php\n\nnamespace Vendor\\Pkg;\n\nuse GuzzleHttp\\Client;\n\nclass Widget { public \$c = Client::class; }\n");
+
+        expect((new DestinationDepAdvisor)->advise($repos['pkg'].'/src/Widget.php', $repos['pkg']))->toBe([]);
+    } finally {
+        surgeon_rrmdir($repos['app']);
+        surgeon_rrmdir($repos['pkg']);
+    }
+});
+
+it('falls back to the installed package composer.json when installed.json is absent', function () {
+    $repos = surgeon_two_repos('vendor-composer');
+
+    try {
+        // No installed.json — the advisor reads vendor/<name>/composer.json directly for the real root.
+        surgeon_write($repos['pkg'].'/composer.json', json_encode([
+            'name' => 'vendor/pkg',
+            'require' => ['guzzlehttp/guzzle' => '^7.0'],
+            'autoload' => ['psr-4' => ['Vendor\\Pkg\\' => 'src/']],
+        ], JSON_PRETTY_PRINT));
+        surgeon_write($repos['pkg'].'/vendor/guzzlehttp/guzzle/composer.json', json_encode([
+            'name' => 'guzzlehttp/guzzle',
+            'autoload' => ['psr-4' => ['GuzzleHttp\\' => 'src/']],
+        ], JSON_PRETTY_PRINT));
+        surgeon_write($repos['pkg'].'/src/Widget.php', "<?php\n\nnamespace Vendor\\Pkg;\n\nuse GuzzleHttp\\Client;\n\nclass Widget { public \$c = Client::class; }\n");
+
+        expect((new DestinationDepAdvisor)->advise($repos['pkg'].'/src/Widget.php', $repos['pkg']))->toBe([]);
+    } finally {
+        surgeon_rrmdir($repos['app']);
+        surgeon_rrmdir($repos['pkg']);
+    }
+});
+
 it('runs the full surgeon:move across both repos under --apply (end-to-end command)', function () {
     $repos = surgeon_two_repos('cmd');
 

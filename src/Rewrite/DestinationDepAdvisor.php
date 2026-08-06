@@ -23,6 +23,14 @@ namespace Rushing\Surgeon\Rewrite;
  * destination `composer.json` neither requires nor already covers by a PSR-4 prefix. False negatives
  * (a symbol reached only transitively) are acceptable — the point is to catch the common, load-bearing
  * "you moved a class that imports a vendor the package doesn't list" mistake before it fatals.
+ *
+ * **How a required package's namespace roots are resolved (tightened, ticket 14 follow-on).** A
+ * `vendor/package` name does NOT reliably imply its namespace root — `guzzlehttp/guzzle` autoloads
+ * `GuzzleHttp\` (not `Guzzlehttp`), `nikic/php-parser` autoloads `PhpParser\`. So this reads each
+ * required package's OWN declared PSR-4/PSR-0 roots, authoritatively, from the destination's installed
+ * metadata — first `vendor/composer/installed.json` (composer's own resolved manifest), then the
+ * package's `vendor/<name>/composer.json` — and only falls back to the Studly-of-vendor guess when the
+ * package isn't installed at all (deps not yet pulled). Installed → precise; not installed → best-effort.
  */
 class DestinationDepAdvisor
 {
@@ -52,7 +60,7 @@ class DestinationDepAdvisor
         }
 
         $composer = $this->readComposer($destinationRoot);
-        $required = $this->requiredVendorRoots($composer);
+        $required = $this->requiredVendorRoots($composer, $destinationRoot);
         $ownPrefixes = $this->autoloadPrefixRoots($composer);
         $packageName = is_string($composer['name'] ?? null) ? $composer['name'] : basename($destinationRoot);
 
@@ -122,15 +130,17 @@ class DestinationDepAdvisor
     }
 
     /**
-     * The top-level namespace segment of every package the destination `require`s / `require-dev`s.
-     * Maps a `vendor/package` to its likely namespace root via composer's own convention (Studly of the
-     * package tail), plus a couple of well-known irregulars. Shallow — see the class docblock.
+     * The top-level namespace segments of every package the destination `require`s / `require-dev`s —
+     * read from each package's OWN declared PSR-4/PSR-0 roots (authoritative), falling back to the
+     * Studly-of-vendor guess only for a package that isn't installed. See the class docblock.
      *
      * @param  array<string, mixed>  $composer
      * @return list<string>
      */
-    private function requiredVendorRoots(array $composer): array
+    private function requiredVendorRoots(array $composer, string $destinationRoot): array
     {
+        $installed = $this->installedNamespaceMap($destinationRoot);
+
         $roots = [];
         foreach (['require', 'require-dev'] as $section) {
             $deps = $composer[$section] ?? [];
@@ -142,7 +152,9 @@ class DestinationDepAdvisor
                 if (! str_contains($name, '/')) {
                     continue; // php / ext-* — not a namespace-bearing dep.
                 }
-                $roots[] = $this->namespaceRootFor($name);
+                foreach ($this->namespaceRootsForPackage($name, $installed, $destinationRoot) as $root) {
+                    $roots[] = $root;
+                }
             }
         }
 
@@ -160,12 +172,11 @@ class DestinationDepAdvisor
     {
         $roots = [];
         foreach (['autoload', 'autoload-dev'] as $section) {
-            $psr4 = $composer[$section]['psr-4'] ?? [];
-            if (! is_array($psr4)) {
-                continue;
-            }
-            foreach (array_keys($psr4) as $prefix) {
-                $roots[] = $this->topSegment(rtrim((string) $prefix, '\\'));
+            $autoload = $composer[$section] ?? [];
+            if (is_array($autoload)) {
+                foreach ($this->rootsFromAutoload($autoload) as $root) {
+                    $roots[] = $root;
+                }
             }
         }
 
@@ -173,15 +184,103 @@ class DestinationDepAdvisor
     }
 
     /**
-     * A best-effort namespace ROOT (the first FQN segment) for a `vendor/package` name. By overwhelming
-     * PSR-4 convention a package's namespace root is the Studly-cased *vendor* (`laravel/mcp` →
-     * `Laravel\Mcp\…` → `Laravel`; `rushing/php-graphine` → `Rushing\…`; `nikic/php-parser` is the
-     * classic irregular → `PhpParser`). We can't know a package's real root without reading its own
-     * composer.json (out of scope for a shallow check), so this Studly-cases the vendor with a couple of
-     * known irregulars. Right for the common estate case — a `Vendor\…` import against a `vendor/*`
-     * require — which is exactly the tail that bit the manual promotion.
+     * The real namespace roots a `vendor/package` declares, resolved in order of authority:
+     *   1. composer's installed manifest (`vendor/composer/installed.json`) — the resolved truth;
+     *   2. the package's own `vendor/<name>/composer.json` autoload block;
+     *   3. the Studly-of-vendor guess (with the `nikic` irregular) — only when the package isn't
+     *      installed, so the check degrades to best-effort rather than vanishing.
+     *
+     * @param  array<string, list<string>>  $installed  name => namespace roots, from installed.json
+     * @return list<string>
      */
-    private function namespaceRootFor(string $package): string
+    private function namespaceRootsForPackage(string $package, array $installed, string $destinationRoot): array
+    {
+        if (isset($installed[$package]) && $installed[$package] !== []) {
+            return $installed[$package];
+        }
+
+        $own = $this->readComposer(rtrim($destinationRoot, '/').'/vendor/'.$package);
+        if ($own !== []) {
+            $roots = $this->rootsFromAutoload(is_array($own['autoload'] ?? null) ? $own['autoload'] : []);
+            if ($roots !== []) {
+                return $roots;
+            }
+        }
+
+        return [$this->studlyFallbackRoot($package)];
+    }
+
+    /**
+     * Parse `vendor/composer/installed.json` into a package-name => namespace-roots map — composer's own
+     * record of what is actually installed and how each package autoloads. Handles both the composer v2
+     * shape (`{"packages": [...]}`) and the legacy bare-list shape. Empty when the manifest is absent
+     * (deps not installed) — callers then fall back per package.
+     *
+     * @return array<string, list<string>>
+     */
+    private function installedNamespaceMap(string $destinationRoot): array
+    {
+        $file = rtrim($destinationRoot, '/').'/vendor/composer/installed.json';
+        if (! is_file($file)) {
+            return [];
+        }
+        $decoded = json_decode((string) @file_get_contents($file), true);
+        if (! is_array($decoded)) {
+            return [];
+        }
+        $packages = $decoded['packages'] ?? $decoded; // v2 wraps in "packages"; v1 is a bare list.
+        if (! is_array($packages)) {
+            return [];
+        }
+
+        $map = [];
+        foreach ($packages as $package) {
+            if (! is_array($package) || ! is_string($package['name'] ?? null)) {
+                continue;
+            }
+            $autoload = is_array($package['autoload'] ?? null) ? $package['autoload'] : [];
+            $roots = $this->rootsFromAutoload($autoload);
+            if ($roots !== []) {
+                $map[$package['name']] = $roots;
+            }
+        }
+
+        return $map;
+    }
+
+    /**
+     * The top-level namespace segments declared by an `autoload` block's PSR-4 and PSR-0 prefixes.
+     *
+     * @param  array<string, mixed>  $autoload
+     * @return list<string>
+     */
+    private function rootsFromAutoload(array $autoload): array
+    {
+        $roots = [];
+        foreach (['psr-4', 'psr-0'] as $scheme) {
+            $prefixes = $autoload[$scheme] ?? [];
+            if (! is_array($prefixes)) {
+                continue;
+            }
+            foreach (array_keys($prefixes) as $prefix) {
+                $root = $this->topSegment(rtrim((string) $prefix, '\\'));
+                if ($root !== '') {
+                    $roots[] = $root;
+                }
+            }
+        }
+
+        return array_values(array_unique($roots));
+    }
+
+    /**
+     * The last-resort namespace-root guess for a package that isn't installed: the Studly-cased vendor
+     * (`laravel/mcp` → `Laravel`; `rushing/php-graphine` → `Rushing`), with the classic `nikic` irregular.
+     * Only reached when neither installed.json nor a `vendor/<name>/composer.json` is present — see the
+     * class docblock. Right often enough to keep the check useful pre-install; the installed reads above
+     * are what make it precise.
+     */
+    private function studlyFallbackRoot(string $package): string
     {
         [$vendor] = array_pad(explode('/', $package, 2), 2, '');
 
