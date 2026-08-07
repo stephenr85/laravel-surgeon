@@ -23,10 +23,17 @@ cross-tier **FQN-relocation**: collapsing the grep-and-repoint hand-work of a re
 
 ## Status
 
-Scaffold only. The only live command today is `surgeon:ping` — a smoke check that the provider
-registers and the AST substrate (nikic + SeamGuard) resolves. Audit, move-spec, and the golden-replay
-acceptance harness land as their tickets graduate. See the effort map in the consuming app at
-`.scratch/refactor-tooling/MAP.md`.
+Past scaffold — the full command surface is live:
+
+- `surgeon:ping` — smoke check that the provider registers and the AST substrate (nikic + SeamGuard) resolves.
+- `surgeon:audit` — the conformance sweep over the host's registered doctor manifest (via `ConformanceManifest`): findings + the deterministic operations that fix them.
+- `surgeon:trace` — target-driven, read-only reference hunt / relocation pre-pass.
+- `surgeon:move` / `surgeon:rewrite` — the writer commands; `--apply` refuses raw declared input, applying only an explicit *resolved* operation set.
+- `surgeon:lint`, `surgeon:overlay`, `surgeon:canonicalize`, `surgeon:replay` — the rest of the operation/verification family.
+
+Backing this: `RegistrationDriftDetector`, `AuditEngine`, and `PackageGraph` in `src/Audit/`, plus an
+MCP server (`src/Mcp/SurgeonMcpServer.php`) exposing the same operations to an agent. See the effort
+map in the consuming app at `.scratch/refactor-tooling/MAP.md`.
 
 ## Local dev
 
