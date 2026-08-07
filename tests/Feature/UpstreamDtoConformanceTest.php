@@ -253,10 +253,11 @@ it('surfaces surgeon built-in audits through the ConformanceSweep alongside the 
         $builtIn = (new BuiltInAudits($host['root']))->audits();
         $report = (new ConformanceSweep(fn (string $a) => new $a))->run(new NullConformanceManifest, $builtIn);
 
-        // Two built-in audits reported even with an empty host manifest, and the b1 candidate is fixable.
-        expect($report->auditCount())->toBe(2)
-            ->and($report->results[0]->audit)->toBe(UpstreamDtoAudit::class)
-            ->and($report->results[1]->audit)->toBe(StaleDownstreamDuplicateAudit::class)
+        // Every built-in audit surgeon ships is reported, in the SAME order BuiltInAudits declares them —
+        // asserted against the real source list, not a copied count/index, so adding a new built-in audit
+        // never desyncs this test from reality; only the report's carrier fields are the actual assertion.
+        expect($report->auditCount())->toBe(count($builtIn))
+            ->and(array_map(fn ($r) => $r->audit, $report->results))->toBe(array_map(fn ($a) => $a::class, $builtIn))
             ->and($report->fixableCount())->toBeGreaterThanOrEqual(1);
     } finally {
         surgeon_rrmdir($host['root']);

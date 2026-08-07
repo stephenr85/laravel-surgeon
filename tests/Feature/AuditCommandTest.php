@@ -2,6 +2,7 @@
 
 use Illuminate\Contracts\Console\Kernel;
 use Rushing\Doctor\DoctorRegistration;
+use Rushing\Surgeon\Conformance\BuiltInAudits;
 use Rushing\Surgeon\Operation\CallbackConformanceManifest;
 use Rushing\Surgeon\Operation\ConformanceManifest;
 use Rushing\Surgeon\Tests\Fixtures\Operations\PlainAudit;
@@ -19,8 +20,10 @@ it('registers surgeon:audit as the conformance sweep', function () {
 
 it('reports surgeon\'s own built-in audits even when no HOST manifest is registered (Null default)', function () {
     // No bindManifest() call → the NullConformanceManifest default is in force, so the host contributes
-    // NOTHING. But ticket 15's built-in audits (b1/b2) always run — the sweep is never empty now. The
-    // testbench base_path() has no app/Data, so both built-ins emit their no-scope Pass and count as 2.
+    // NOTHING. But surgeon's built-in audits (b1/b2 from ticket 15 + local-MCP-wiring) always run — the
+    // sweep is never empty now. The testbench base_path() has no app/Data, so b1/b2 emit their no-scope
+    // Pass; laravel/mcp isn't installed in the testbench app, so the wiring audit's no-local-servers Pass
+    // fires too.
     $this->artisan('surgeon:audit')
         ->expectsOutputToContain('UpstreamDtoAudit')
         ->expectsOutputToContain('StaleDownstreamDuplicateAudit')
@@ -59,10 +62,13 @@ it('dedupes the same audit registered by many packages', function () {
         new DoctorRegistration('tower', PlainAudit::class),
     ]);
 
-    // 2 distinct HOST audits after dedupe (SuggestingAudit once + PlainAudit), plus surgeon's 2 built-in
-    // audits (b1/b2, ticket 15) which always run alongside — 4 in total.
+    // 2 distinct HOST audits after dedupe (SuggestingAudit once + PlainAudit), plus however many built-in
+    // audits surgeon ships alongside — read from the real source, not a copied literal, so a future
+    // built-in addition doesn't silently desync this assertion from reality.
+    $builtInCount = count((new BuiltInAudits($this->app->basePath()))->audits());
+
     $this->artisan('surgeon:audit')
-        ->expectsOutputToContain('(4 audit(s))')
+        ->expectsOutputToContain('('.($builtInCount + 2).' audit(s))')
         ->assertExitCode(0);
 });
 
