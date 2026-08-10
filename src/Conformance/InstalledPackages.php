@@ -140,6 +140,25 @@ class InstalledPackages
         return null;
     }
 
+    /**
+     * Every installed package whose composer name starts with a vendor prefix (e.g. `splicewire/`),
+     * mapped to its absolute install path — for directory-scan discovery (which packages does this
+     * vendor own, and where do they live on disk), distinct from `ownerOf()`'s FQN resolution.
+     *
+     * @return array<string, string> package name => absolute install path
+     */
+    public function namedLike(string $vendorPrefix): array
+    {
+        $matches = [];
+        foreach ($this->packages as $package) {
+            if (str_starts_with($package['name'], $vendorPrefix)) {
+                $matches[$package['name']] = $package['path'];
+            }
+        }
+
+        return $matches;
+    }
+
     private static function tailOf(string $fqn, int $segments): string
     {
         $parts = explode('\\', ltrim($fqn, '\\'));

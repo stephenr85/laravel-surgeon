@@ -29,6 +29,8 @@ use Rushing\Surgeon\Operation\SuggestsOperations;
  * guards every touch of `laravel/mcp`'s `Registrar` behind `class_exists()`. {@see TrackerStatusDriftAudit}
  * (surgeon-audit-viability ticket 11) is the same posture applied to the local-markdown issue tracker: a
  * PRD's own terminal-status claim about a child issue going stale once the issue's `Status:` line moves on.
+ * {@see ChecklistStatusDriftAudit} (ticket 20) is that same posture's intra-file sibling: an issue's own
+ * `Status:` line disagreeing with its own acceptance-checkbox state, no PRD involved.
  */
 class BuiltInAudits
 {
@@ -48,8 +50,8 @@ class BuiltInAudits
     /**
      * The built-in audits, in report order: b1 (promotion candidates), b2 (stale duplicates), the
      * local-MCP-wiring audit (a registered `Mcp::local()` handle missing from `.mcp.json`), then the
-     * tracker PRD-vs-issue status-drift audit. All emit {@see FixableFinding}s through the ticket-07/13
-     * bridge.
+     * two tracker status-drift audits (PRD-vs-issue, then issue-vs-own-checkboxes). All emit
+     * {@see FixableFinding}s through the ticket-07/13 bridge.
      *
      * @return list<SuggestsOperations>
      */
@@ -60,6 +62,7 @@ class BuiltInAudits
             new StaleDownstreamDuplicateAudit($this->appRoot, $this->namespace, $this->dir),
             new LocalMcpWiringAudit($this->appRoot),
             new TrackerStatusDriftAudit($this->appRoot, $this->trackerDir),
+            new ChecklistStatusDriftAudit($this->appRoot, $this->trackerDir),
         ];
     }
 }
