@@ -6,3 +6,4 @@ composer.local.json
 .DS_Store
 .vscode/
 /.surgeon
+CLAUDE.md
