@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "c3b2eb15582c29ddb9294da28ad96b6f",
+    "content-hash": "3815be70f565ca7d0575673dd3a26597",
     "packages": [
         {
             "name": "brick/math",
@@ -3164,7 +3164,7 @@
             "dist": {
                 "type": "path",
                 "url": "../laravel-doctor",
-                "reference": "73cd0156fd396555ff1b425768fd60879bf68e65"
+                "reference": "fe2b36a9e4470ca0fa561968e8b6c82f626347ec"
             },
             "require": {
                 "illuminate/support": "^11.0|^12.0|^13.0",
@@ -3229,10 +3229,10 @@
         {
             "name": "rushing/php-graphine",
             "version": "dev-main",
-            "dist": {
-                "type": "path",
-                "url": "../php-graphine",
-                "reference": "a3da382638e7de6d0e6c6b9ac2e5d313c6778055"
+            "source": {
+                "type": "git",
+                "url": "https://github.com/stephenr85/php-graphine.git",
+                "reference": "634b3b47dc7fd25217fed77e687a9767e2ad98e8"
             },
             "require": {
                 "php": "^8.3"
@@ -3246,6 +3246,7 @@
                 "graphp/graph": "MIT — pure-PHP in-memory graph algorithms behind the reference driver (roles 1/2)",
                 "nikic/php-parser": "BSD-3 — AST scanner behind the seam guard a consumer runs over its own App\\Graph\\Drivers"
             },
+            "default-branch": true,
             "type": "library",
             "extra": {
                 "package-topology": {
@@ -3290,10 +3291,7 @@
                 "seam",
                 "substrate"
             ],
-            "transport-options": {
-                "symlink": true,
-                "relative": true
-            }
+            "time": "2026-08-10T02:27:00+00:00"
         },
         {
             "name": "rushing/php-package-topology",
@@ -3301,7 +3299,7 @@
             "dist": {
                 "type": "path",
                 "url": "../php-package-topology",
-                "reference": "38d3b73f634244f8a9bc6f0329b33d3eeaab9f03"
+                "reference": "46e3d6ac01148c946b5c7ca8ee159a5e57c8bf93"
             },
             "require": {
                 "php": "^8.3",
@@ -3363,10 +3361,10 @@
         {
             "name": "rushing/php-popcorn",
             "version": "dev-main",
-            "dist": {
-                "type": "path",
-                "url": "../php-popcorn",
-                "reference": "8e64cb5f0b08886f8c629ccaa4884226fc6e1791"
+            "source": {
+                "type": "git",
+                "url": "https://github.com/stephenr85/php-popcorn.git",
+                "reference": "6900c7e4e2b0276a0328ef671883fcc3e2ca19dd"
             },
             "require": {
                 "php": "^8.3",
@@ -3376,6 +3374,7 @@
                 "laravel/pint": "^1.0",
                 "pestphp/pest": "^3.0"
             },
+            "default-branch": true,
             "type": "library",
             "extra": {
                 "package-topology": {
@@ -3419,10 +3418,7 @@
                 "registry",
                 "strategy"
             ],
-            "transport-options": {
-                "symlink": true,
-                "relative": true
-            }
+            "time": "2026-08-10T02:27:43+00:00"
         },
         {
             "name": "symfony/clock",
@@ -8775,7 +8771,7 @@
             "dist": {
                 "type": "path",
                 "url": "../laravel-mcp-registry",
-                "reference": "27acb9adac7613f26dfbf565f56616275526b36c"
+                "reference": "05f2db6d0919c1f535ad039ed5d6211859c7ac22"
             },
             "require": {
                 "illuminate/console": "^11.0|^12.0|^13.0",
