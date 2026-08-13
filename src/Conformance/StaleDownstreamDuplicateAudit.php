@@ -81,6 +81,14 @@ class StaleDownstreamDuplicateAudit implements SuggestsOperations
                 continue;
             }
 
+            // An app class that EXTENDS its twin is not a stale duplicate — it is the sanctioned
+            // host-facing-projection end-state of reconciling one: the package owns the shape, and the
+            // thin app subclass re-adds a host concern (e.g. `#[TypeScript]`, which typed-client codegen
+            // wants but the package deliberately drops so it never forces the dependency on consumers).
+            if ($class->extends === $twin['fqn']) {
+                continue;
+            }
+
             $drift = $this->describeDrift($class, $twinClass);
 
             if ($drift === '') {

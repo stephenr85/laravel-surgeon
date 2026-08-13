@@ -87,6 +87,14 @@ class UpstreamDtoAudit implements SuggestsOperations
                 continue; // imports don't converge on exactly one downstream package (or are app-coupled)
             }
 
+            // A thin app shell that EXTENDS a class the derived home already ships is not a promotion
+            // candidate — it is the sanctioned host-facing projection (b2's reconciled end-state: the
+            // package owns the shape, the subclass re-adds a host concern like `#[TypeScript]`).
+            // Promoting it would push that host concern back down into the package.
+            if ($class->extends !== null && $installed->ownerOf($class->extends) === $home) {
+                continue;
+            }
+
             // 0-cycle-risk: relocating into $home must not close an upward edge back to the app package.
             if ($appPackage !== null && $graph->reaches($home, $appPackage)) {
                 $findings[] = new FixableFinding(Finding::warn(

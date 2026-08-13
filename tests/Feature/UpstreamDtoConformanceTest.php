@@ -202,6 +202,36 @@ it('b2: flags a DRIFTED twin as advisory-only and NAMES the drift (adds $composa
     }
 });
 
+it('does NOT flag (b1 or b2) an app shell that SUBCLASSES its downstream twin — the reconciled projection', function () {
+    // The reconciled end-state of a drifted twin: the package owns the shape, and the app keeps a THIN
+    // subclass that re-adds the host concern (#[TypeScript]) the package deliberately drops. Neither a
+    // stale duplicate (b2) nor a promotion candidate (b1) — promoting it would push the host concern down.
+    $appShell = "<?php\n\nnamespace App\\Data;\n\nuse Spatie\\TypeScriptTransformer\\Attributes\\TypeScript;\nuse Vendor\\Beam\\Data\\EntryData as BaseEntryData;\n\n#[TypeScript]\nclass EntryData extends BaseEntryData {}\n";
+    $twinClass = "<?php\n\nnamespace Vendor\\Beam\\Data;\n\nuse Spatie\\LaravelData\\Data;\n\nclass EntryData extends Data\n{\n    public function __construct(public string \$slug, public array \$body) {}\n}\n";
+
+    $host = surgeon_host('b2-subclass', [
+        'EntryData.php' => $appShell,
+    ], [
+        'vendor/beam' => [
+            'psr4' => 'Vendor\\Beam\\',
+            'dir' => 'src',
+            'files' => ['Data/EntryData.php' => $twinClass],
+        ],
+    ]);
+
+    try {
+        $b2 = (new StaleDownstreamDuplicateAudit($host['root']))->suggestOperations();
+        $b1 = (new UpstreamDtoAudit($host['root']))->suggestOperations();
+
+        expect(array_filter($b2, fn ($f) => str_starts_with($f->finding->check, 'stale-duplicate.') && $f->finding->check !== 'stale-duplicate.none'))->toBe([])
+            ->and($b2[0]->finding->check)->toBe('stale-duplicate.none')
+            ->and(array_filter($b1, fn ($f) => $f->finding->check === 'upstream-dto.promotion-candidate'))->toBe([])
+            ->and($b1[0]->finding->check)->toBe('upstream-dto.none');
+    } finally {
+        surgeon_rrmdir($host['root']);
+    }
+});
+
 it('b2: does NOT flag an app DTO with no downstream twin', function () {
     $host = surgeon_host('b2-notwin', [
         'LonelyData.php' => "<?php\n\nnamespace App\\Data;\n\nuse Spatie\\LaravelData\\Data;\n\nclass LonelyData extends Data\n{\n    public function __construct(public string \$x) {}\n}\n",

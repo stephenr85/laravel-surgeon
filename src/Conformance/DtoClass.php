@@ -31,6 +31,10 @@ class DtoClass
      * @param  list<string>  $imports  every `use` import, as a fully-qualified name (no leading `\`)
      * @param  PublicShape  $shape  the public property + method-signature shape (for b2's drift compare)
      * @param  list<string>  $attributes  class-level attribute short names (e.g. `TypeScript`)
+     * @param  string|null  $extends  the resolved parent-class FQN (no leading `\`), null when the class
+     *                                extends nothing — how both audits recognize the sanctioned
+     *                                host-facing-projection end-state (an app shell that SUBCLASSES its
+     *                                downstream twin to re-add a host concern like `#[TypeScript]`)
      */
     public function __construct(
         public string $fqn,
@@ -38,6 +42,7 @@ class DtoClass
         public array $imports,
         public PublicShape $shape,
         public array $attributes,
+        public ?string $extends = null,
     ) {}
 
     /** The class's short name (last namespace segment) — the twin-detection key alongside the tail. */

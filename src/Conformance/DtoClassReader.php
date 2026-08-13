@@ -61,6 +61,8 @@ class DtoClassReader
             /** @var list<string> */
             public array $attributes = [];
 
+            public ?string $extends = null;
+
             public function enterNode(Node $node): null
             {
                 if ($node instanceof Node\Stmt\Use_) {
@@ -82,6 +84,14 @@ class DtoClassReader
 
             private function collectClassLike(Node\Stmt\ClassLike $class): void
             {
+                // The resolved parent FQN — how the audits recognize an app shell that deliberately
+                // SUBCLASSES its downstream twin (the sanctioned host-facing-projection end-state).
+                if ($class instanceof Node\Stmt\Class_ && $class->extends !== null) {
+                    $resolved = $class->extends->getAttribute('resolvedName');
+                    $parent = $resolved instanceof Node\Name ? $resolved->toString() : $class->extends->toString();
+                    $this->extends = ltrim($parent, '\\');
+                }
+
                 foreach ($class->attrGroups as $group) {
                     foreach ($group->attrs as $attr) {
                         $this->attributes[] = $attr->name->getLast();
@@ -130,6 +140,7 @@ class DtoClassReader
             imports: array_values(array_unique($visitor->imports)),
             shape: new PublicShape($visitor->properties, $visitor->methods),
             attributes: array_values(array_unique($visitor->attributes)),
+            extends: $visitor->extends,
         );
     }
 }
