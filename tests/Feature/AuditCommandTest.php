@@ -55,6 +55,24 @@ it('fails the exit code on a Fail from a gate registration', function () {
     $this->artisan('surgeon:audit')->assertExitCode(1);
 });
 
+it('takes a severity floor — a gate Warn passes at the default Fail floor and fails at --floor=warn', function () {
+    // PlainAudit emits a Warn; as a gate registration it passes the historical fixed-Fail
+    // comparison but must turn the exit red once the floor lowers to warn (the sweep's one
+    // runner alignment — the floor, never the runner itself).
+    bindManifest([new DoctorRegistration('pkg', PlainAudit::class, gate: true)]);
+
+    $this->artisan('surgeon:audit')->assertExitCode(0);
+    $this->artisan('surgeon:audit', ['--floor' => 'warn'])->assertExitCode(1);
+});
+
+it('rejects an unknown --floor value loudly', function () {
+    bindManifest([new DoctorRegistration('pkg', PlainAudit::class, gate: true)]);
+
+    $this->artisan('surgeon:audit', ['--floor' => 'nope'])
+        ->expectsOutputToContain('Invalid --floor value')
+        ->assertExitCode(1);
+});
+
 it('dedupes the same audit registered by many packages', function () {
     bindManifest([
         new DoctorRegistration('beam', SuggestingAudit::class),

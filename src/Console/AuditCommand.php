@@ -34,25 +34,34 @@ use Rushing\Surgeon\Operation\ConformanceSweep;
 class AuditCommand extends Command
 {
     protected $signature = 'surgeon:audit
-        {--json : Emit the machine-readable sweep (findings + suggestions) as JSON instead of a table}';
+        {--json : Emit the machine-readable sweep (findings + suggestions) as JSON instead of a table}
+        {--floor=fail : Gate severity floor (pass|warn|fail) — a gate finding AT or ABOVE it turns the exit code red}';
 
     protected $description = 'Sweep the registered doctor manifest, reporting conformance findings and the deterministic operations that fix them (read-only).';
 
     public function handle(ConformanceManifest $manifest): int
     {
+        $floor = DoctorStatus::tryFrom(strtolower((string) $this->option('floor')));
+
+        if ($floor === null) {
+            $this->error('Invalid --floor value ['.$this->option('floor').'] — expected pass, warn, or fail.');
+
+            return self::FAILURE;
+        }
+
         $builtIn = (new BuiltInAudits($this->laravel->basePath()))->audits();
         $report = (new ConformanceSweep(fn (string $audit) => $this->laravel->make($audit)))->run($manifest, $builtIn);
 
         if ($this->option('json')) {
             $this->line((string) json_encode($report->toArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 
-            return $report->hasGateFailure() ? self::FAILURE : self::SUCCESS;
+            return $report->hasGateFailure($floor) ? self::FAILURE : self::SUCCESS;
         }
 
-        return $this->emitTable($report);
+        return $this->emitTable($report, $floor);
     }
 
-    private function emitTable(ConformanceReport $report): int
+    private function emitTable(ConformanceReport $report, DoctorStatus $floor): int
     {
         $this->line('');
         $this->line('<options=bold>surgeon:audit — conformance sweep</> ('.$report->auditCount().' audit(s))');
@@ -78,7 +87,7 @@ class AuditCommand extends Command
         $this->renderFooter($report);
         $this->line('');
 
-        return $report->hasGateFailure() ? self::FAILURE : self::SUCCESS;
+        return $report->hasGateFailure($floor) ? self::FAILURE : self::SUCCESS;
     }
 
     private function renderAudit(ConformanceAuditResult $result): void

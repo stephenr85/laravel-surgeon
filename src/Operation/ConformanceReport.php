@@ -61,17 +61,20 @@ class ConformanceReport
     }
 
     /**
-     * Whether the sweep should turn the exit code red: a Fail finding from a `gate` registration
-     * (advisory registrations render Fail but never fail the code — mirrors the doctor gate/advisory split).
+     * Whether the sweep should turn the exit code red: a finding from a `gate` registration AT or
+     * ABOVE the severity floor (advisory registrations render findings but never fail the code —
+     * mirrors the doctor gate/advisory split). The floor defaults to Fail, the historical fixed
+     * comparison; `--floor=warn` lets a converged host fail on regression warnings too
+     * (particle-doctrine-followups: the sweep's one runner alignment — the floor, never the runner).
      */
-    public function hasGateFailure(): bool
+    public function hasGateFailure(DoctorStatus $floor = DoctorStatus::Fail): bool
     {
         foreach ($this->results as $result) {
             if (! $result->gate) {
                 continue;
             }
             foreach ($result->fixables as $fixable) {
-                if ($fixable->finding->status === DoctorStatus::Fail) {
+                if ($fixable->finding->status->atLeast($floor)) {
                     return true;
                 }
             }
