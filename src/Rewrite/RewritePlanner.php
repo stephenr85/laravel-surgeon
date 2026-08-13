@@ -334,6 +334,14 @@ class RewritePlanner
                 continue;
             }
 
+            // A docblock span spelling the full FQN (a `{@see \A\B\C}`) is NOT an import — it gets
+            // its own splice but repoints nothing else in the file, so it must not license a bare
+            // code reference as a no-op the way a real `use` line does.
+            if ($ref->category === ReferenceCategory::DocblockTagReference
+                || $ref->category === ReferenceCategory::DocblockProseReference) {
+                continue;
+            }
+
             // A file that spells the target's full FQN anywhere holds an explicit `use` line for it
             // (its span is the whole FQN) — the one place a `use` is recorded, even when file-role
             // reclassification (a test/migration/route dir) relabels its category. That import is

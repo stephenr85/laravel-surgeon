@@ -56,6 +56,39 @@ it('leaves an imported short name untouched when the basename is unchanged (the 
     expect($decision)->toBe(['action' => 'noop']);
 });
 
+it('splices a docblock short-name span basename-only, with no rewriter change (ticket 03)', function () {
+    // A same-namespace rename: the {@see Widget} span holds only the short name, so it takes only
+    // the new basename — decide()'s existing trailing-segment rule, no docblock special-casing.
+    $rename = (new RewritePlanner)->decide(
+        planRef(ReferenceCategory::DocblockTagReference, 'Widget', 'Vendor\\Old\\Widget', 'Vendor\\Old\\Gadget'),
+    );
+    expect($rename)->toBe(['action' => 'edit', 'text' => 'Gadget']);
+
+    // A pure relocation (basename unchanged): the short docblock span is a no-op, exactly like an
+    // imported short name in code — the use-line repoint carries it.
+    $relocation = (new RewritePlanner)->decide(
+        planRef(ReferenceCategory::DocblockTagReference, 'Widget', 'Vendor\\Old\\Widget', 'Vendor\\New\\Widget'),
+    );
+    expect($relocation)->toBe(['action' => 'noop']);
+
+    // A fully-qualified docblock span takes the whole new FQN, leading backslash preserved.
+    $fq = (new RewritePlanner)->decide(
+        planRef(ReferenceCategory::DocblockTagReference, '\\Vendor\\Old\\Widget', 'Vendor\\Old\\Widget', 'Vendor\\New\\Widget'),
+    );
+    expect($fq)->toBe(['action' => 'edit', 'text' => '\\Vendor\\New\\Widget']);
+});
+
+it('reports a prose docblock reference without ever planning a splice for it', function () {
+    // Tier 2 by category — the planner's tier gate drops it before decide() is even consulted.
+    $plan = estatePlan();
+
+    $proseEdits = collect($plan->edits)
+        ->filter(fn ($e) => $e->category === ReferenceCategory::DocblockProseReference);
+
+    expect($proseEdits)->toBeEmpty()
+        ->and($plan->skips)->toBeEmpty();
+});
+
 it('rewrites the namespace-declaration span to the destination namespace, never the FQN', function () {
     $decision = (new RewritePlanner)->decide(
         planRef(ReferenceCategory::NamespaceDeclaration, 'Vendor\\Old', 'Vendor\\Old\\Widget', 'Vendor\\New\\Widget'),
@@ -93,14 +126,15 @@ it('leaves an aliased inline name alone (the use ... as line carries the move)',
 it('plans exactly the Tier-1 edits for a relocation across the estate, Tier 2/3 untouched', function () {
     $plan = estatePlan();
 
-    expect($plan->edits)->toHaveCount(3)
+    expect($plan->edits)->toHaveCount(5)
         ->and($plan->skips)->toBe([])
         ->and($plan->unsupported)->toBeNull();
 
-    // The two full-FQN reference sites (a use import + a test-fixture use) and the moved file's own
-    // namespace line — the imported short names (typehint, ::class, `new Widget`) are no-ops.
+    // The three full-FQN reference sites (two use imports + a test-fixture use), the moved file's own
+    // namespace line, and Documented's fully-qualified {@see} tag — the imported short names
+    // (typehint, ::class, `new Widget`, short docblock tags) are no-ops.
     $categories = collect($plan->edits)->map(fn ($e) => $e->category->value)->sort()->values()->all();
-    expect($categories)->toBe(['namespace-decl', 'test-fixture-reference', 'use-import']);
+    expect($categories)->toBe(['docblock-tag-reference', 'namespace-decl', 'test-fixture-reference', 'use-import', 'use-import']);
 
     $nsEdit = collect($plan->edits)->firstWhere('category', ReferenceCategory::NamespaceDeclaration);
     expect($nsEdit->oldText)->toBe('Vendor\\Old')->and($nsEdit->newText)->toBe('Vendor\\New');

@@ -51,7 +51,7 @@ it('emits the machine-readable finding-set to a file with --out', function () {
 
     expect(file_exists($out))->toBeTrue();
     $decoded = json_decode(file_get_contents($out), true);
-    expect($decoded['summary']['total'])->toBe(13)
+    expect($decoded['summary']['total'])->toBe(20)
         ->and($decoded['references'])->toBeArray();
 
     @unlink($out);

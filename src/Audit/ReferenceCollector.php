@@ -23,6 +23,15 @@ use Rushing\Graphine\Testing\SeamGuard;
  * typehint, a `morphMap([...])` value, an `app(\FQN::class)` runtime resolve, a `Gate::policy`
  * registration). The *positional* refinement (a reference living in a migration / test / route /
  * config file) is applied afterwards by {@see AuditEngine}, which knows the file's role in the tree.
+ *
+ * A SECOND, comment-token pass follows the AST walk: docblock/comment references (a `{@see Foo}`,
+ * an `@var Foo`, a prose mention of `Foo`) are structurally invisible to the node walk, so every
+ * rename used to leave them behind for a human to grep. The pass scans raw comment SPANS (never the
+ * parser's attached docblocks — an orphan `@var` above a plain assignment is attached
+ * inconsistently), and its false-positive gate is load-bearing: a bare short name is recorded only
+ * when the file's own import table or current namespace — both already in hand from the walk —
+ * resolves it to a matching FQN. A common word in an unrelated file does not resolve, so it never
+ * enters the set.
  */
 class ReferenceCollector
 {
@@ -67,6 +76,12 @@ class ReferenceCollector
             /** @var list<Reference> */
             public array $references = [];
 
+            /** @var array<string, string> the file's own import table: short alias => FQN (class-like imports only) */
+            public array $imports = [];
+
+            /** @var string the file's current namespace ('' when global) */
+            public string $namespace = '';
+
             /** @var list<Node> ancestor stack (excludes the node currently being entered) */
             private array $stack = [];
 
@@ -79,6 +94,7 @@ class ReferenceCollector
             {
                 if ($node instanceof Node\Stmt\Namespace_) {
                     $this->namespaceName = $node->name;
+                    $this->namespace = $node->name?->toString() ?? '';
                 } elseif ($node instanceof Node\Stmt\Use_) {
                     $this->collectUse($node);
                 } elseif ($node instanceof Node\Stmt\GroupUse) {
@@ -106,6 +122,7 @@ class ReferenceCollector
             {
                 foreach ($node->uses as $use) {
                     $fqn = $use->name->toString();
+                    $this->tabulateImport($node->type, $use, $fqn);
                     if ($this->target->matches($fqn)) {
                         $this->record($fqn, $use->name, ReferenceCategory::UseImport);
                     }
@@ -118,10 +135,25 @@ class ReferenceCollector
                 $prefix = $node->prefix->toString();
                 foreach ($node->uses as $use) {
                     $fqn = $prefix.'\\'.$use->name->toString();
+                    $this->tabulateImport($node->type, $use, $fqn);
                     if ($this->target->matches($fqn)) {
                         $this->record($fqn, $use->name, ReferenceCategory::UseImport);
                     }
                 }
+            }
+
+            /**
+             * Keep the file's own import table (alias => FQN) for the comment-token pass — class-like
+             * imports only; function/const imports can never be a docblock type reference.
+             */
+            private function tabulateImport(int $statementType, Node\UseItem $use, string $fqn): void
+            {
+                $effective = $use->type !== Node\Stmt\Use_::TYPE_UNKNOWN ? $use->type : $statementType;
+                if ($effective !== Node\Stmt\Use_::TYPE_UNKNOWN && $effective !== Node\Stmt\Use_::TYPE_NORMAL) {
+                    return;
+                }
+
+                $this->imports[$use->getAlias()->toString()] = $fqn;
             }
 
             /**
@@ -260,13 +292,22 @@ class ReferenceCollector
                     return;
                 }
 
+                $this->recordSpan($fqn, $start, $end, $span->getStartLine(), $category);
+            }
+
+            /**
+             * The raw-offset overload of {@see record()} — the comment-token pass has byte offsets
+             * (a span inside a comment token), never a Node to read them from.
+             */
+            public function recordSpan(string $fqn, int $start, int $end, int $line, ReferenceCategory $category): void
+            {
                 $this->references[] = new Reference(
                     category: $category,
                     tier: $category->tier(),
                     root: '',
                     file: '',
                     relativePath: '',
-                    line: $span->getStartLine(),
+                    line: $line,
                     matchedFqn: Target::normalize($fqn),
                     startPos: $start,
                     endPos: $end,
@@ -279,6 +320,28 @@ class ReferenceCollector
         $walk = new NodeTraverser;
         $walk->addVisitor($visitor);
         $walk->traverse($ast);
+
+        // Second pass — comment tokens. Docblock tags and prose mentions are invisible to the node
+        // walk; merged into the reference set here, BEFORE path stamping, so they ride the same
+        // stamping/refinement pipeline as every AST-shaped reference. Comment SPANS from the raw
+        // token stream, deliberately not node-attached docblocks (orphan `@var` attachment is
+        // parser-inconsistent).
+        foreach ($parser->getTokens() as $token) {
+            if ($token->id !== \T_DOC_COMMENT && $token->id !== \T_COMMENT) {
+                continue;
+            }
+
+            foreach ($this->commentOccurrences($token->text, $target, $visitor->imports, $visitor->namespace) as $occurrence) {
+                $start = $token->pos + $occurrence['offset'];
+                $visitor->recordSpan(
+                    $occurrence['fqn'],
+                    $start,
+                    $start + strlen($occurrence['written']) - 1,
+                    $token->line + substr_count($token->text, "\n", 0, $occurrence['offset']),
+                    $occurrence['category'],
+                );
+            }
+        }
 
         // Stamp root / relative path now that scanning found them (the visitor is file-agnostic).
         $relative = str_starts_with($file, $root.'/') ? substr($file, strlen($root) + 1) : $file;
@@ -299,5 +362,100 @@ class ReferenceCollector
             ),
             $visitor->references,
         );
+    }
+
+    /**
+     * Scan ONE comment token's text for references to the target — the docblock/prose detection the
+     * AST walk cannot see. Two written forms are hunted:
+     *
+     *  - a (fully-)qualified name (`\A\B\C` or `A\B\C`), matched against the target directly;
+     *  - a bare short name, admitted ONLY through the false-positive gate: it must resolve via the
+     *    file's own import table, or as a sibling in the file's current namespace, to an FQN the
+     *    target matches. An unrelated common word resolves to nothing relevant and never enters.
+     *
+     * Category is decided by POSITION: an occurrence inside the type slot of a docblock tag
+     * (`{@see …}` / `@var` / `@param` / `@return` / `@throws`) is a {@see ReferenceCategory::DocblockTagReference}
+     * (Tier 1 — tag grammar makes the span unambiguous); anywhere else in the comment it is a
+     * {@see ReferenceCategory::DocblockProseReference} (Tier 2 — reported, never auto-spliced).
+     *
+     * @param  array<string, string>  $imports  the file's own import table (short alias => FQN)
+     * @return list<array{offset: int, written: string, fqn: string, category: ReferenceCategory}>
+     */
+    private function commentOccurrences(string $text, Target $target, array $imports, string $namespace): array
+    {
+        $occurrences = [];
+        $tagRegions = $this->tagTypeRegions($text);
+
+        $categorise = function (int $offset, int $length) use ($tagRegions): ReferenceCategory {
+            foreach ($tagRegions as [$start, $end]) {
+                if ($offset >= $start && $offset + $length <= $end) {
+                    return ReferenceCategory::DocblockTagReference;
+                }
+            }
+
+            return ReferenceCategory::DocblockProseReference;
+        };
+
+        // Qualified forms — two or more segments, optional leading backslash.
+        preg_match_all('/\\\\?[A-Za-z_][A-Za-z0-9_]*(?:\\\\[A-Za-z_][A-Za-z0-9_]*)+/', $text, $qualified, PREG_OFFSET_CAPTURE);
+        foreach ($qualified[0] as [$written, $offset]) {
+            if ($target->matches($written)) {
+                $occurrences[] = [
+                    'offset' => $offset,
+                    'written' => $written,
+                    'fqn' => Target::normalize($written),
+                    'category' => $categorise($offset, strlen($written)),
+                ];
+            }
+        }
+
+        // Bare short names — never part of a qualified run (the lookarounds), never a `$variable`.
+        // THE GATE: resolve against the file's import table, then its namespace; only a resolution
+        // the target matches is recorded.
+        preg_match_all('/(?<![\w\\\\$])[A-Za-z_][A-Za-z0-9_]*(?![\w\\\\])/', $text, $bare, PREG_OFFSET_CAPTURE);
+        foreach ($bare[0] as [$written, $offset]) {
+            $fqn = $imports[$written] ?? ($namespace === '' ? $written : $namespace.'\\'.$written);
+            if ($target->matches($fqn)) {
+                $occurrences[] = [
+                    'offset' => $offset,
+                    'written' => $written,
+                    'fqn' => $fqn,
+                    'category' => $categorise($offset, strlen($written)),
+                ];
+            }
+        }
+
+        usort($occurrences, fn (array $a, array $b) => $a['offset'] <=> $b['offset']);
+
+        return $occurrences;
+    }
+
+    /**
+     * The byte regions of every docblock tag's TYPE SLOT in one comment text — `{@see X}` inline
+     * tags and `@var`/`@param`/`@return`/`@throws`/`@see` line tags. The slot starts after the tag
+     * keyword's whitespace and runs across type-expression characters only (`Foo`, `\A\B`, `?Foo`,
+     * `Foo|Bar`, `Foo[]`, `Collection<Foo>`, `Foo::bar()`), so the first prose word ends it — a
+     * `@param int $x the Widget count` puts only `int` in the slot, leaving `Widget` to prose.
+     *
+     * @return list<array{0: int, 1: int}> [start, end) byte offsets into $text
+     */
+    private function tagTypeRegions(string $text): array
+    {
+        $regions = [];
+        preg_match_all('/(?:\{@(?:see|link)|@(?:var|param|return|throws|see))[ \t]+/', $text, $tags, PREG_OFFSET_CAPTURE);
+
+        foreach ($tags[0] as [$tag, $offset]) {
+            $start = $offset + strlen($tag);
+            $end = $start;
+            $length = strlen($text);
+            while ($end < $length && preg_match('/[A-Za-z0-9_\\\\|&?<>,\[\]():]/', $text[$end]) === 1) {
+                $end++;
+            }
+            if ($end > $start) {
+                $regions[] = [$start, $end];
+            }
+        }
+
+        return $regions;
     }
 }

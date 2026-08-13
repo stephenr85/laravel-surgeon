@@ -122,7 +122,15 @@ class AuditEngine
         return false;
     }
 
-    /** Only the generic class-load categories move by file role; the special syntactic ones stay put. */
+    /**
+     * Only the generic class-load categories move by file role; the special syntactic ones stay put.
+     *
+     * STATED DECISION (particle-doctrine-followups #03): the docblock categories are deliberately
+     * NOT in the generic list, so a Tier-1 docblock tag reference inside a test/migration/route
+     * directory is NOT demoted the way an import there is. A docblock in a test is still a docblock
+     * — its tag grammar is what makes the span safe to splice, and the file's role changes neither
+     * that grammar nor who repoints it. This is a choice, not an omission.
+     */
     private function refineByFileRole(Reference $ref): ReferenceCategory
     {
         $generic = [
