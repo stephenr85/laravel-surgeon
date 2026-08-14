@@ -6,6 +6,7 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Process;
 use Rushing\Surgeon\Audit\AuditReport;
 use Rushing\Surgeon\Audit\ReferenceCategory;
+use Rushing\Surgeon\Audit\Tier;
 use Rushing\Surgeon\Operation\RelocationOperation;
 use Rushing\Surgeon\Rewrite\DestinationDepAdvisor;
 use Rushing\Surgeon\Rewrite\DeterministicGate;
@@ -46,6 +47,9 @@ class MoveCommand extends Command
         {--no-composer : Within the gate, skip composer dump-autoload}';
 
     protected $description = 'Apply a Tier-1 FQN-relocation from a resolved audit finding-set — byte-splice + physical move, under the safety contract (preview by default).';
+
+    /** Per-category cap on the Tier-2/3 handoff notice — a notice, not a second report. */
+    private const GUIDED_PREVIEW_LIMIT = 5;
 
     public function handle(): int
     {
@@ -114,6 +118,8 @@ class MoveCommand extends Command
         $this->line('<options=bold>surgeon:move — PREVIEW</> '.$plan->target->value.' → '.$plan->target->newFqn);
         $this->line('<fg=yellow>No files written. Re-run with --apply to write.</>');
         $this->renderPlan($plan);
+        $this->renderGuidedReferences($report);
+        $this->renderDestinationDepAdvisory($plan);
         $this->renderDerivedTests($report);
 
         return self::SUCCESS;
@@ -169,10 +175,69 @@ class MoveCommand extends Command
         $this->line("  touch-manifest → {$manifestPath}");
         $this->line('  <fg=yellow>Not committed.</> Review the staged diff; the manifest is the scoped-undo surface.');
         $this->renderSkips($plan);
+        $this->renderGuidedReferences($report);
         $this->renderDestinationDepAdvisory($plan);
         $this->renderDerivedTests($report);
 
         return self::SUCCESS;
+    }
+
+    /**
+     * The Tier-2/Tier-3 references the finding-set carries and this command will NEVER touch.
+     *
+     * `surgeon:move` is a Tier-1 writer by contract — Tier 2 is guided, Tier 3 is advisory, and the
+     * audit deliberately does not promote across that seam. But the command used to say nothing about
+     * them, so a run reported "applied: N splice(s)" and left the operator believing the relocation
+     * was complete. It reported the Tier-1 refs it had to SKIP and the destination composer-dep
+     * advisory, and stayed silent on every reference that was correctly classified out of its reach.
+     *
+     * That silence is not a small omission. A Tier-3 `route-config-reference` is a class-string in a
+     * config seam — a stale one does not fail at boot, it fails the first time the seam is exercised,
+     * which can be far from the move. The trace command lists these; the MOVE is where someone acts,
+     * so it has to name them here too.
+     *
+     * Grouped by category with a count, and capped: this is a handoff notice, not a second report —
+     * `surgeon:trace` remains the full listing.
+     */
+    private function renderGuidedReferences(AuditReport $report): void
+    {
+        $byCategory = [];
+        foreach ($report->references() as $ref) {
+            if ($ref->tier === Tier::One) {
+                continue;
+            }
+            $byCategory[$ref->tier->value][$ref->category->value][] = $ref;
+        }
+
+        if ($byCategory === []) {
+            return;
+        }
+
+        ksort($byCategory);
+        $total = 0;
+        foreach ($byCategory as $categories) {
+            foreach ($categories as $refs) {
+                $total += count($refs);
+            }
+        }
+
+        $this->line('');
+        $this->line('  <fg=yellow>Not touched by this command — '.$total.' reference(s) above Tier 1:</>');
+
+        foreach ($byCategory as $tier => $categories) {
+            ksort($categories);
+            foreach ($categories as $category => $refs) {
+                $this->line("    <options=bold>{$tier}</> {$category} (".count($refs).')');
+                foreach (array_slice($refs, 0, self::GUIDED_PREVIEW_LIMIT) as $ref) {
+                    $this->line("      <fg=gray>{$ref->relativePath}:{$ref->line}</>");
+                }
+                if (count($refs) > self::GUIDED_PREVIEW_LIMIT) {
+                    $this->line('      <fg=gray>… '.(count($refs) - self::GUIDED_PREVIEW_LIMIT).' more</>');
+                }
+            }
+        }
+
+        $this->line('    <fg=gray>(surgeon:trace lists them in full — these need a human or a cleanup agent.)</>');
     }
 
     /**
