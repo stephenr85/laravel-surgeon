@@ -10,6 +10,7 @@ use Rushing\Surgeon\Operation\RelocationOperation;
 use Rushing\Surgeon\Rewrite\DestinationDepAdvisor;
 use Rushing\Surgeon\Rewrite\DeterministicGate;
 use Rushing\Surgeon\Rewrite\FindingSetLoader;
+use Rushing\Surgeon\Rewrite\PhysicalMove;
 use Rushing\Surgeon\Rewrite\PlannedEdit;
 use Rushing\Surgeon\Rewrite\RewritePlan;
 use Rushing\Surgeon\Rewrite\SpliceApplier;
@@ -226,11 +227,33 @@ class MoveCommand extends Command
             $this->line('');
             $this->line('  <options=bold>physical move'.(count($plan->moves) > 1 ? 's' : '').'</>');
             foreach ($plan->moves as $move) {
-                $this->line('    <fg=gray>'.$move->fromRelative.'</>  →  <fg=green>'.$move->toRelative.'</>');
+                $this->line('    <fg=gray>'.$this->moveEndpoint($move->fromRelative, $move->sourceRepo, $move)
+                    .'</>  →  <fg=green>'.$this->moveEndpoint($move->toRelative, $move->destinationRepo, $move).'</>'
+                    .($move->crossRepo ? '  <fg=yellow>[cross-repo]</>' : ''));
             }
         }
 
         $this->renderSkips($plan);
+    }
+
+    /**
+     * Render one end of a physical move, repo-qualified when the relative path alone would be
+     * ambiguous or misleading.
+     *
+     * A relative path is root-relative, so on a CROSS-REPO move the two ends can print identically
+     * while naming files in different repositories — `src/Models/Foo.php → src/Models/Foo.php` reads
+     * as a no-op when it is in fact a promotion out of one package into another. That is the exact
+     * moment a reviewer most needs to know which tree each side is in, so prefix the repo's directory
+     * name and flag the move. Same-repo moves keep the original bare-relative rendering, which is
+     * unambiguous by construction.
+     */
+    private function moveEndpoint(string $relative, ?string $repo, PhysicalMove $move): string
+    {
+        if (! $move->crossRepo || $repo === null) {
+            return $relative;
+        }
+
+        return basename($repo).'/'.$relative;
     }
 
     private function renderSkips(RewritePlan $plan): void
