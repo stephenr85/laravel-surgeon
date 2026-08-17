@@ -27,6 +27,38 @@ class AuditEngine
     /** Directory segments never worth scanning (dependencies + VCS + build noise). */
     private const IGNORED_SEGMENTS = ['vendor', 'node_modules', '.git', 'storage', '.tests', '.scratch'];
 
+    /**
+     * Filename suffixes this engine reads. `.php.stub` is here because a **publish-only migration
+     * template is real source that references real symbols** — the estate ships its migrations as
+     * timestamp-less `.php.stub` and re-stamps them into a host on `vendor:publish`, so a class the
+     * template imports is a live reference that a relocation breaks exactly like any other.
+     *
+     * Before this, the walk tested `getExtension() === 'php'`, which is `'stub'` for
+     * `create_threads_table.php.stub` — so the engine was structurally blind to that whole population.
+     * The cost was measured during the beam-facade effort: 39 templates had to be swept by hand
+     * (ticket 15) and, worse, `surgeon:trace` could not *see* them, which matters more than the write
+     * — ticket 18 concluded it is trace, not move, that earns this engine its place, since tracing is
+     * how an entirely unswept package was found at all. A find step with a permanent blind spot is a
+     * find step you cannot trust to be exhaustive.
+     *
+     * **Matched as a full suffix, never as an extension.** The estate ships other `.stub` kinds —
+     * `nav.ts.stub`, `prototype-host.tsx.stub`, and bare `particle-resource.stub` templates carrying
+     * placeholder tokens — none of which are parseable PHP. `.php.stub` is the only stub dialect that
+     * is valid PHP verbatim (39/39 `php -l` clean, and 62/62 on the dated population it publishes to).
+     *
+     * ## What this does NOT change
+     * Nothing about writing. `refineByFileRole()` maps any path under `/migrations/` to
+     * {@see ReferenceCategory::MigrationReference} → tier 2, and every `.php.stub` in the estate lives
+     * under `database/migrations/` — so a stub reference surfaces in the report and the writer declines
+     * it, with no per-finding tier override to force. That is the wall ticket 16 hit empirically on the
+     * published copies, and it is why the beam-facade effort chose hand edits (option B3) over teaching
+     * the engine this extension: the extension was never what blocked the write. This closes the
+     * discovery gap only, which is the half that was actually costing.
+     *
+     * @var list<string>
+     */
+    private const SCANNABLE_SUFFIXES = ['.php', '.php.stub'];
+
     public function __construct(
         private ReferenceCollector $collector = new ReferenceCollector,
     ) {}
@@ -226,15 +258,16 @@ class AuditEngine
     }
 
     /**
-     * Recursively list `.php` files under a path (or the single file itself), skipping dependency /
-     * VCS / build directories. Mirrors graphine's SeamGuard file walk with an ignore-list.
+     * Recursively list scannable source files ({@see SCANNABLE_SUFFIXES}) under a path (or the single
+     * file itself), skipping dependency / VCS / build directories. Mirrors graphine's SeamGuard file
+     * walk with an ignore-list.
      *
      * @return list<string>
      */
     private function phpFilesIn(string $path): array
     {
         if (is_file($path)) {
-            return str_ends_with($path, '.php') ? [$path] : [];
+            return $this->isScannable($path) ? [$path] : [];
         }
         if (! is_dir($path)) {
             return [];
@@ -248,7 +281,7 @@ class AuditEngine
                         return ! in_array($current->getFilename(), self::IGNORED_SEGMENTS, true);
                     }
 
-                    return $current->getExtension() === 'php';
+                    return $this->isScannable($current->getFilename());
                 },
             ),
         );
@@ -263,5 +296,20 @@ class AuditEngine
         sort($files);
 
         return $files;
+    }
+
+    /**
+     * Whether a filename carries one of {@see SCANNABLE_SUFFIXES}. A full-suffix match, deliberately —
+     * see that constant on why `.ts.stub` / `.tsx.stub` / bare `.stub` must not qualify.
+     */
+    private function isScannable(string $filename): bool
+    {
+        foreach (self::SCANNABLE_SUFFIXES as $suffix) {
+            if (str_ends_with($filename, $suffix)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
