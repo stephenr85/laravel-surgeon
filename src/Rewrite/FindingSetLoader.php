@@ -94,7 +94,7 @@ class FindingSetLoader
             return null;
         }
 
-        [$root, $absolute] = self::resolvePath($relative, $roots);
+        [$root, $absolute] = self::resolvePath($relative, $roots, $ref['root'] ?? null);
         if ($absolute === null) {
             return null;
         }
@@ -118,11 +118,31 @@ class FindingSetLoader
     }
 
     /**
+     * Resolve a recorded relative path back to the ONE file the audit actually saw.
+     *
+     * The reference's OWN root is authoritative and is tried first. Probing the root list in order —
+     * which is all this did originally — is only correct while relative paths are unique across roots,
+     * and they are not: a multi-root move over `laravel-beam` + `laravel-beam-commerce` has
+     * `src/Entitlements/EntitlementGate.php` in both, so the first root won and the plan pointed at the
+     * wrong file. The splice drift-guard caught it and refused, but only after the whole move had been
+     * planned against a file it never audited.
+     *
+     * Probing survives as a fallback for finding-sets written before `root` was recorded per reference,
+     * and for a tree relocated wholesale between trace and move.
+     *
      * @param  list<string>  $roots
      * @return array{0: string, 1: string|null} [root, absolutePath] or [firstRoot, null] if unresolved
      */
-    private static function resolvePath(string $relative, array $roots): array
+    private static function resolvePath(string $relative, array $roots, mixed $recordedRoot = null): array
     {
+        if (is_string($recordedRoot) && $recordedRoot !== '') {
+            $root = rtrim($recordedRoot, '/');
+            $candidate = $root.'/'.$relative;
+            if (is_file($candidate)) {
+                return [$root, $candidate];
+            }
+        }
+
         foreach ($roots as $root) {
             $candidate = $root.'/'.$relative;
             if (is_file($candidate)) {
