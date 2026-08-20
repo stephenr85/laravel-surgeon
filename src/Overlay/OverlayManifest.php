@@ -151,7 +151,10 @@ class OverlayManifest
             return rtrim($url, '/');
         }
 
-        $joined = $baseDir.'/'.$url;
+        // Join onto the REAL base dir: a project reached through a symlink (a Herd site symlinked
+        // into a workspace tree) otherwise collapses its `..` segments against the symlink's parent
+        // and reports a live checkout as missing — see DanglingPathRepoAudit's class docblock.
+        $joined = (realpath($baseDir) ?: $baseDir).'/'.$url;
         $real = realpath($joined);
 
         return $real !== false ? $real : self::normalize($joined);

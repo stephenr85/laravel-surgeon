@@ -52,7 +52,9 @@ class BuiltInAudits
      * local-MCP-wiring audit (a registered `Mcp::local()` handle missing from `.mcp.json`), the
      * two tracker status-drift audits (PRD-vs-issue, then issue-vs-own-checkboxes), then the
      * config class-string audit (a class-string in a config file that does not resolve —
-     * particle-doctrine-followups #04). All emit {@see FixableFinding}s through the ticket-07/13 bridge.
+     * particle-doctrine-followups #04), then the dangling-path-repo audit (a composer `type: path`
+     * repository whose checkout is gone, which aborts every composer command in the repo at parse
+     * time). All emit {@see FixableFinding}s through the ticket-07/13 bridge.
      *
      * @return list<SuggestsOperations>
      */
@@ -65,6 +67,7 @@ class BuiltInAudits
             new TrackerStatusDriftAudit($this->appRoot, $this->trackerDir),
             new ChecklistStatusDriftAudit($this->appRoot, $this->trackerDir),
             new ConfigClassStringAudit($this->appRoot),
+            new DanglingPathRepoAudit($this->appRoot),
         ];
     }
 }
