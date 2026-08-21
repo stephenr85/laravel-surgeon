@@ -41,12 +41,23 @@ class SurgeonServiceProvider extends BaseServiceProvider
 {
     public function register(): void
     {
+        // `surgeon.mcp.granted_abilities` was read by SurgeonMcpServer without this package ever
+        // shipping or merging a file that defines it, so the root resolved to null. The inline `[]`
+        // default made that harmless — default-DENY is the intended floor — but it also meant a host
+        // had no declared, discoverable place to grant an ability. Merging the file makes the knob real
+        // without changing the default.
+        $this->mergeConfigFrom(__DIR__.'/../config/surgeon.php', 'surgeon');
+
         $this->app->bindIf(ConformanceManifest::class, NullConformanceManifest::class);
     }
 
     public function boot(): void
     {
         if ($this->app->runningInConsole()) {
+            $this->publishes([
+                __DIR__.'/../config/surgeon.php' => config_path('surgeon.php'),
+            ], 'surgeon-config');
+
             $this->commands([
                 PingCommand::class,
                 TraceCommand::class,
