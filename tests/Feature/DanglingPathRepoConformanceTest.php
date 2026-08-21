@@ -25,6 +25,22 @@ function danglingRepoRoot(string $label, array $files, array $siblings = []): st
     return $root;
 }
 
+/**
+ * The audit's findings minus the standing scope line, which every run emits and no case below is
+ * about. The line itself is asserted once, on its own, further down.
+ *
+ * @return list<\Rushing\Surgeon\Operation\FixableFinding>
+ */
+function danglingFindings(string $appRoot, bool $walkNeighbours = true): array
+{
+    $findings = (new DanglingPathRepoAudit($appRoot, walkNeighbours: $walkNeighbours))->suggestOperations();
+
+    return array_values(array_filter(
+        $findings,
+        fn ($f) => $f->finding->check !== DanglingPathRepoAudit::CHECK.'.scope',
+    ));
+}
+
 it('fails on a dangling path repo in composer.json, naming the file, the entry, and the missing path', function () {
     $root = danglingRepoRoot('dangling-base', [
         'composer.json' => [
@@ -38,7 +54,7 @@ it('fails on a dangling path repo in composer.json, naming the file, the entry, 
     ], siblings: ['alive']);
 
     try {
-        $findings = (new DanglingPathRepoAudit($root.'/app'))->suggestOperations();
+        $findings = danglingFindings($root.'/app');
 
         expect($findings)->toHaveCount(1)
             ->and($findings[0]->finding->status)->toBe(DoctorStatus::Fail)
@@ -76,7 +92,7 @@ it('resolves relative urls through a SYMLINKED repo directory, not its literal p
         // Sanity: the symlink genuinely hides the sibling from a lexical reading of the path.
         expect(is_dir(dirname($link).'/packages/alive'))->toBeFalse();
 
-        $findings = (new DanglingPathRepoAudit($link))->suggestOperations();
+        $findings = danglingFindings($link);
 
         // Exactly one dangling entry — the live sibling is seen THROUGH the symlink, not reported dead.
         expect($findings)->toHaveCount(1)
@@ -102,7 +118,7 @@ it('reads the name-keyed map shape of repositories as well as the list shape', f
     ], siblings: ['alive']);
 
     try {
-        $findings = (new DanglingPathRepoAudit($root.'/app'))->suggestOperations();
+        $findings = danglingFindings($root.'/app');
 
         expect($findings)->toHaveCount(1)
             ->and($findings[0]->finding->detail)->toContain('[local-gone]');
@@ -124,7 +140,7 @@ it('tolerates a wildcard url that expands to nothing, exactly as composer does',
     ], siblings: ['alive']);
 
     try {
-        $findings = (new DanglingPathRepoAudit($root.'/app'))->suggestOperations();
+        $findings = danglingFindings($root.'/app');
 
         expect($findings)->toHaveCount(1)
             ->and($findings[0]->finding->status)->toBe(DoctorStatus::Pass);
@@ -139,7 +155,7 @@ it('fails a wildcard whose de-magicked ancestor is itself gone, citing that ance
     ], siblings: ['alive']);
 
     try {
-        $findings = (new DanglingPathRepoAudit($root.'/app'))->suggestOperations();
+        $findings = danglingFindings($root.'/app');
 
         expect($findings)->toHaveCount(1)
             ->and($findings[0]->finding->status)->toBe(DoctorStatus::Fail)
@@ -157,7 +173,7 @@ it('nominates overlay-remove for the live overlay, and stays advisory for the sh
     ]);
 
     try {
-        $findings = (new DanglingPathRepoAudit($root.'/app'))->suggestOperations();
+        $findings = danglingFindings($root.'/app');
         expect($findings)->toHaveCount(2);
 
         [$base, $overlay] = $findings;
@@ -181,7 +197,7 @@ it('warns separately for a template, which is a latent brick rather than a live 
     ]);
 
     try {
-        $findings = (new DanglingPathRepoAudit($root.'/app'))->suggestOperations();
+        $findings = danglingFindings($root.'/app');
 
         expect($findings)->toHaveCount(1)
             ->and($findings[0]->finding->status)->toBe(DoctorStatus::Warn)
@@ -203,7 +219,7 @@ it('honours an absolute path url and passes cleanly when every target exists', f
     ], JSON_PRETTY_PRINT));
 
     try {
-        $findings = (new DanglingPathRepoAudit($root.'/app'))->suggestOperations();
+        $findings = danglingFindings($root.'/app');
 
         expect($findings)->toHaveCount(1)
             ->and($findings[0]->finding->status)->toBe(DoctorStatus::Pass)
@@ -220,7 +236,7 @@ it('passes with a distinct check when the repo declares no path repositories at 
     ]);
 
     try {
-        $findings = (new DanglingPathRepoAudit($root.'/app'))->suggestOperations();
+        $findings = danglingFindings($root.'/app');
 
         expect($findings)->toHaveCount(1)
             ->and($findings[0]->finding->status)->toBe(DoctorStatus::Pass)
@@ -237,10 +253,110 @@ it('skips an unparseable composer config without aborting the audit', function (
     surgeon_write($root.'/app/composer.json', '{ this is not json');
 
     try {
-        $findings = (new DanglingPathRepoAudit($root.'/app'))->suggestOperations();
+        $findings = danglingFindings($root.'/app');
 
         expect($findings)->toHaveCount(1)
             ->and($findings[0]->finding->detail)->toContain('composer.local.json');
+    } finally {
+        surgeon_rrmdir($root);
+    }
+});
+
+it('walks the roots its path repos declare, reporting a neighbour defect the running root cannot see', function () {
+    // The overlay is the roster: `app` co-devs against `packages/lib`, whose OWN overlay points at a
+    // checkout that is gone. Nothing in `app`'s configs names that checkout, so only the walk finds it.
+    $root = danglingRepoRoot('dangling-neighbour', [
+        'composer.local.json' => ['repositories' => [['type' => 'path', 'url' => '../packages/lib']]],
+    ], siblings: ['lib']);
+    surgeon_write($root.'/packages/lib/composer.local.json', json_encode([
+        'repositories' => [['type' => 'path', 'url' => '../retired']],
+    ], JSON_PRETTY_PRINT));
+
+    try {
+        $findings = danglingFindings($root.'/app');
+
+        expect($findings)->toHaveCount(1)
+            ->and($findings[0]->finding->status)->toBe(DoctorStatus::Warn)
+            ->and($findings[0]->finding->check)->toBe(DanglingPathRepoAudit::CHECK.'.neighbour')
+            ->and($findings[0]->finding->detail)->toContain(realpath($root).'/packages/lib/composer.local.json')
+            ->and($findings[0]->finding->detail)->toContain('belongs to '.realpath($root).'/packages/lib')
+            // Someone else's tree is never a deterministic splice from here.
+            ->and($findings[0]->isAdvisory())->toBeTrue();
+
+        // …and the same defect is invisible with the walk switched off, which is what makes it a reach
+        // fix rather than a predicate fix.
+        expect(danglingFindings($root.'/app', walkNeighbours: false))->toHaveCount(1)
+            ->and(danglingFindings($root.'/app', walkNeighbours: false)[0]->finding->status)->toBe(DoctorStatus::Pass);
+    } finally {
+        surgeon_rrmdir($root);
+    }
+});
+
+it('keeps the running root at Fail while a neighbour with the identical defect only warns', function () {
+    $root = danglingRepoRoot('dangling-severity-split', [
+        'composer.local.json' => ['repositories' => [
+            ['type' => 'path', 'url' => '../packages/lib'],
+            ['type' => 'path', 'url' => '../packages/gone'],
+        ]],
+    ], siblings: ['lib']);
+    surgeon_write($root.'/packages/lib/composer.local.json', json_encode([
+        'repositories' => [['type' => 'path', 'url' => '../gone-too']],
+    ], JSON_PRETTY_PRINT));
+
+    try {
+        $findings = danglingFindings($root.'/app');
+        $byCheck = [];
+        foreach ($findings as $f) {
+            $byCheck[$f->finding->check] = $f->finding->status;
+        }
+
+        expect($byCheck[DanglingPathRepoAudit::CHECK])->toBe(DoctorStatus::Fail)
+            ->and($byCheck[DanglingPathRepoAudit::CHECK.'.neighbour'])->toBe(DoctorStatus::Warn);
+    } finally {
+        surgeon_rrmdir($root);
+    }
+});
+
+it('terminates on a cycle, because the visited set is keyed on realpath', function () {
+    // Two repos globbing each other's parent — the estate's normal spelling, and an infinite walk
+    // without dedupe. The symlinked third path reaches `lib` again under a different name.
+    $root = danglingRepoRoot('dangling-cycle', [
+        'composer.local.json' => ['repositories' => [['type' => 'path', 'url' => '../packages/*']]],
+    ], siblings: ['lib']);
+    surgeon_write($root.'/packages/lib/composer.local.json', json_encode([
+        'repositories' => [
+            ['type' => 'path', 'url' => '../../app'],
+            ['type' => 'path', 'url' => '../*'],
+        ],
+    ], JSON_PRETTY_PRINT));
+    symlink($root.'/packages/lib', $root.'/packages/lib-alias');
+
+    try {
+        $findings = danglingFindings($root.'/app');
+
+        expect($findings)->toHaveCount(1)
+            ->and($findings[0]->finding->status)->toBe(DoctorStatus::Pass)
+            ->and($findings[0]->finding->check)->toBe(DanglingPathRepoAudit::CHECK.'.clean');
+    } finally {
+        surgeon_rrmdir($root);
+    }
+})->group('slow-guard');
+
+it('always ships one line saying what it did not check, whatever the verdict', function () {
+    $root = danglingRepoRoot('dangling-scope-line', [
+        'composer.json' => ['repositories' => [['type' => 'path', 'url' => '../packages/gone']]],
+    ]);
+
+    try {
+        $findings = (new DanglingPathRepoAudit($root.'/app'))->suggestOperations();
+        $scope = array_values(array_filter($findings, fn ($f) => $f->finding->check === DanglingPathRepoAudit::CHECK.'.scope'));
+
+        expect($scope)->toHaveCount(1)
+            ->and($scope[0]->finding->status)->toBe(DoctorStatus::Pass)
+            ->and($scope[0]->finding->detail)->toContain('remotes are not verified')
+            ->and($scope[0]->finding->detail)->toContain('installed state is not read')
+            // It rides alongside a Fail, not only alongside a clean run.
+            ->and($findings)->toHaveCount(2);
     } finally {
         surgeon_rrmdir($root);
     }

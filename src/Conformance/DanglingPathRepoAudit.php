@@ -48,6 +48,29 @@ use Rushing\Surgeon\Overlay\OverlayVerb;
  * exist across this estate; the finding cites the map key when there is one and the list index
  * otherwise, so the entry can be found without re-deriving it.
  *
+ * **The walk reaches the overlay's neighbours, because the overlay IS the roster.** A path repo url
+ * names a *root*, so the configs a repo declares already enumerate the repos it co-develops against —
+ * nothing external has to list them. The audit therefore scans the running root, the roots its configs
+ * point at, and theirs in turn, deduped on `realpath()`. That dedupe is the load-bearing detail rather
+ * than the depth: the same real root is reached under many paths (sites are commonly symlinked, and an
+ * absolute-path overlay reaches the same directory a relative one does), and a visited set keyed on the
+ * real path is also what makes the walk cycle-safe by construction — two repos globbing each other's
+ * parent (`../*`) is the normal spelling here, not an edge case. The alternative shape — a `--root`
+ * flag plus some external roster file — was refused: it is scaffolding for a list every root carries,
+ * and it would teach this package a vocabulary that is not composer's.
+ *
+ * **A neighbour's defect reports; it never gates.** Findings about the running root keep the severity
+ * split above. A finding about a *neighbour* is a **Warn** whatever file it sits in, names the root that
+ * owns the file, and nominates nothing deterministic — the repair belongs to someone else's tree, an
+ * `overlay-remove` here would splice the wrong repo's config, and in an estate where several sessions
+ * work at once someone else's half-finished edit must never redden this root's exit code.
+ *
+ * **What this audit does not check, stated in its own report.** It is a pure manifest-and-filesystem
+ * question: remotes are not verified and installed state is not read, so a clean result means "composer
+ * will parse these manifests", never "this root will boot". That line ships as a finding
+ * ({@see self::CHECK}`.scope`) rather than living in this docblock, because the person who needs it is
+ * reading a sweep, not the source.
+ *
  * **A wildcard url that expands to nothing is not a defect.** Path urls may be globs (`../*`,
  * `../../rushing/*` — heavily used across this estate) and composer explicitly tolerates one that
  * currently matches no package as long as its de-magicked ancestor directory exists. The existence
@@ -74,13 +97,18 @@ class DanglingPathRepoAudit implements SuggestsOperations
         'composer.local.json.off' => false,
     ];
 
+    /** The one line the report always carries about what it did NOT check. */
+    public const SCOPE_NOTE = 'Scope: composer manifests and the filesystem only — remotes are not verified and installed state is not read, so a clean result means composer will parse these manifests, not that the root will boot.';
+
     /**
      * @param  string  $appRoot  the repo root whose composer configs are scanned (the running host)
      * @param  array<string, bool>  $files  config file name => is-live, overriding {@see self::FILES}
+     * @param  bool  $walkNeighbours  follow the roots this one's path repos declare (and theirs)
      */
     public function __construct(
         public string $appRoot,
         public array $files = self::FILES,
+        public bool $walkNeighbours = true,
     ) {}
 
     /** @return list<FixableFinding> */
@@ -90,38 +118,66 @@ class DanglingPathRepoAudit implements SuggestsOperations
         $scannedFiles = 0;
         $scannedEntries = 0;
 
-        foreach ($this->files as $file => $live) {
-            $path = rtrim($this->appRoot, '/').'/'.$file;
-            if (! is_file($path)) {
-                continue;
-            }
-            $scannedFiles++;
+        $runningRoot = realpath($this->appRoot) ?: rtrim($this->appRoot, '/');
+        $queue = [$runningRoot];
+        $visited = [$runningRoot => true];
 
-            foreach ($this->pathRepositories($path) as $entry) {
-                $scannedEntries++;
-                if ($entry['exists']) {
+        while ($queue !== []) {
+            $root = array_shift($queue);
+            $isNeighbour = $root !== $runningRoot;
+
+            foreach ($this->files as $file => $live) {
+                $path = $root.'/'.$file;
+                if (! is_file($path)) {
                     continue;
                 }
+                $scannedFiles++;
 
-                $findings[] = $this->dangling($file, $live, $entry);
+                foreach ($this->pathRepositories($path) as $entry) {
+                    $scannedEntries++;
+
+                    if (! $entry['exists']) {
+                        $findings[] = $this->dangling($file, $live, $entry, $isNeighbour ? $root : null);
+
+                        continue;
+                    }
+
+                    if (! $this->walkNeighbours) {
+                        continue;
+                    }
+
+                    // The overlay is the roster: every target that is itself a repo joins the walk,
+                    // deduped on realpath so a cycle (`../*` pointing back) terminates on already-seen.
+                    foreach ($entry['matches'] as $target) {
+                        if (! isset($visited[$target]) && is_file($target.'/composer.json')) {
+                            $visited[$target] = true;
+                            $queue[] = $target;
+                        }
+                    }
+                }
             }
         }
 
+        $roots = count($visited);
+
         if ($scannedEntries === 0) {
-            return [new FixableFinding(Finding::pass(
+            $findings[] = new FixableFinding(Finding::pass(
                 self::CHECK.'.no-scope',
                 $scannedFiles === 0
                     ? 'No composer config in this repo — no path repositories to check.'
                     : "No type:path repositories declared across {$scannedFiles} composer config(s).",
-            ))];
-        }
-
-        if ($findings === []) {
+            ));
+        } elseif ($findings === []) {
             $findings[] = new FixableFinding(Finding::pass(
                 self::CHECK.'.clean',
-                "All {$scannedEntries} type:path repositor(y/ies) across {$scannedFiles} composer config(s) resolve to a directory that exists.",
+                "All {$scannedEntries} type:path repositor(y/ies) across {$scannedFiles} composer config(s) in {$roots} repo(s) resolve to a directory that exists.",
             ));
         }
+
+        $findings[] = new FixableFinding(Finding::pass(
+            self::CHECK.'.scope',
+            sprintf('Scanned %d composer config(s) across %d repo(s) — this repo and the roots its path repositories declare. %s', $scannedFiles, $roots, self::SCOPE_NOTE),
+        ));
 
         return $findings;
     }
@@ -131,7 +187,10 @@ class DanglingPathRepoAudit implements SuggestsOperations
      * directory holding it. Accepts both `repositories` shapes; a config that does not decode to an
      * object contributes nothing rather than aborting the run.
      *
-     * @return list<array{key: string, url: string, resolved: string, exists: bool}>
+     * `matches` is the real directories the url actually expands to — the walk's next hop, and empty
+     * for anything that does not resolve.
+     *
+     * @return list<array{key: string, url: string, resolved: string, exists: bool, matches: list<string>}>
      */
     public function pathRepositories(string $configFile): array
     {
@@ -175,7 +234,7 @@ class DanglingPathRepoAudit implements SuggestsOperations
      * `resolved` is the path a human has to go look at: the target itself for a plain url, the
      * missing ancestor for a wildcard.
      *
-     * @return array{resolved: string, exists: bool}
+     * @return array{resolved: string, exists: bool, matches: list<string>}
      */
     private function resolve(string $baseDir, string $url): array
     {
@@ -188,11 +247,11 @@ class DanglingPathRepoAudit implements SuggestsOperations
 
         $matches = glob($pattern, GLOB_MARK | GLOB_ONLYDIR | (defined('GLOB_BRACE') ? GLOB_BRACE : 0));
         if (is_array($matches) && $matches !== []) {
-            return ['resolved' => $pattern, 'exists' => true];
+            return ['resolved' => $pattern, 'exists' => true, 'matches' => $this->realDirs($matches)];
         }
 
         if (! $magic) {
-            return ['resolved' => $pattern, 'exists' => is_dir($pattern)];
+            return ['resolved' => $pattern, 'exists' => is_dir($pattern), 'matches' => $this->realDirs([$pattern])];
         }
 
         $ancestor = $pattern;
@@ -200,7 +259,29 @@ class DanglingPathRepoAudit implements SuggestsOperations
             $ancestor = dirname($ancestor);
         }
 
-        return ['resolved' => $ancestor, 'exists' => is_dir($ancestor)];
+        // A wildcard expanding to nothing is legal, and it is also not a hop — the ancestor is a
+        // parent directory, not a repo, so it is reported on but never walked.
+        return ['resolved' => $ancestor, 'exists' => is_dir($ancestor), 'matches' => []];
+    }
+
+    /**
+     * Real, de-duplicable directory paths for a set of glob matches — `GLOB_MARK` leaves a trailing
+     * slash, and the whole walk keys on `realpath()`.
+     *
+     * @param  list<string>  $paths
+     * @return list<string>
+     */
+    private function realDirs(array $paths): array
+    {
+        $out = [];
+        foreach ($paths as $path) {
+            $real = realpath(rtrim($path, '/'));
+            if ($real !== false && is_dir($real)) {
+                $out[$real] = true;
+            }
+        }
+
+        return array_keys($out);
     }
 
     /** Collapse `.` / `..` segments without touching disk (the base is already real). */
@@ -223,12 +304,14 @@ class DanglingPathRepoAudit implements SuggestsOperations
     }
 
     /**
-     * @param  array{key: string, url: string, resolved: string, exists: bool}  $entry
+     * @param  array{key: string, url: string, resolved: string, exists: bool, matches: list<string>}  $entry
+     * @param  string|null  $owningRoot  the neighbour that owns the file, or null for the running root
      */
-    private function dangling(string $file, bool $live, array $entry): FixableFinding
+    private function dangling(string $file, bool $live, array $entry, ?string $owningRoot = null): FixableFinding
     {
         $detail = sprintf(
-            '%s: type:path repository [%s] url "%s" resolves to %s, which does not exist — %s',
+            '%s%s: type:path repository [%s] url "%s" resolves to %s, which does not exist — %s',
+            $owningRoot !== null ? $owningRoot.'/' : '',
             $file,
             $entry['key'],
             $entry['url'],
@@ -237,6 +320,18 @@ class DanglingPathRepoAudit implements SuggestsOperations
                 ? 'composer aborts at parse time, so EVERY composer command in this repo fails until the entry is removed or the checkout restored.'
                 : 'materializing this template would abort every composer command in this repo.',
         );
+
+        // A neighbour's file is someone else's repair: warn wherever it sits, name the owner, and
+        // nominate nothing deterministic — an overlay-remove here would splice the wrong repo.
+        if ($owningRoot !== null) {
+            return new FixableFinding(
+                Finding::warn(self::CHECK.'.neighbour', $detail.' This file belongs to '.$owningRoot.', not to the repo running the audit — the repair is that repo\'s.'),
+                OperationSuggestion::advisory(
+                    "Drop or repoint the stale path repo {$entry['url']} in {$owningRoot}/{$file} — run surgeon there, or repair it in place.",
+                    'rushing/laravel-surgeon',
+                ),
+            );
+        }
 
         if ($live && $file !== 'composer.json') {
             return new FixableFinding(
