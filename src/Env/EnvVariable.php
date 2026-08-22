@@ -26,12 +26,18 @@ class EnvVariable
      * @param  list<string>  $sites  `path:line` sites reading it (empty when only declared)
      * @param  bool  $documented  declared in `.env.example`
      * @param  bool  $set  present in the local `.env` (name only — never the value)
+     * @param  list<string>  $declaredIn  every dotenv file declaring it, by basename, in role order
+     * @param  list<string>  $missingFrom  environment files that do NOT declare it — where it is
+     *                                     absent at boot, because Laravel swaps the file rather
+     *                                     than layering it ({@see EnvFileSet})
      */
     public function __construct(
         public string $name,
         public array $sites = [],
         public bool $documented = false,
         public bool $set = false,
+        public array $declaredIn = [],
+        public array $missingFrom = [],
     ) {}
 
     public function isRead(): bool
@@ -82,13 +88,24 @@ class EnvVariable
     }
 
     /**
-     * A one-word status for rendering, worst first: the cache hazard outranks documentation gaps
-     * because it is a live bug rather than a tidiness problem.
+     * Documented as required, yet absent from an environment file that exists — so it is missing in
+     * that environment specifically.
+     */
+    public function hasEnvironmentGap(): bool
+    {
+        return $this->missingFrom !== [];
+    }
+
+    /**
+     * A one-word status for rendering, worst first. The cache hazard outranks everything because it
+     * is a live bug; an environment gap outranks a documentation gap because it breaks a running
+     * environment rather than a deployer's expectations.
      */
     public function status(): string
     {
         return match (true) {
             $this->isCacheUnsafe() => 'cache-unsafe',
+            $this->hasEnvironmentGap() => 'environment-gap',
             $this->isUndocumented() => 'undocumented',
             $this->isUnused() => 'unused',
             default => 'ok',
@@ -104,6 +121,8 @@ class EnvVariable
             'read' => $this->isRead(),
             'documented' => $this->documented,
             'set' => $this->set,
+            'declared_in' => $this->declaredIn,
+            'missing_from' => $this->missingFrom,
             'sites' => $this->sites,
             'reads_outside_config' => $this->readsOutsideConfig(),
         ];

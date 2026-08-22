@@ -166,9 +166,87 @@ it('reports an absent .env.example rather than pretending it documents nothing',
 
     $inventory = env_inventory($root);
 
-    expect($inventory->exampleExists)->toBeFalse()
-        ->and($inventory->envExists)->toBeFalse()
+    expect($inventory->exampleExists())->toBeFalse()
+        ->and($inventory->envExists())->toBeFalse()
         ->and($inventory->undocumented())->toHaveCount(1);
+
+    surgeon_rrmdir($root);
+});
+
+it('classifies each dotenv file by the role it plays at boot', function () {
+    $root = env_tree('env-roles');
+    surgeon_write($root.'/.env.testing', "SERVICE_ENDPOINT=\n");
+    surgeon_write($root.'/.env.bak', "JUNK=\n");
+
+    $files = env_inventory($root)->files;
+
+    expect(array_map(fn ($f) => [$f->name, $f->role, $f->environment], $files->files))->toBe([
+        ['.env.example', 'documentation', null],
+        ['.env', 'base', null],
+        ['.env.testing', 'environment', 'testing'],
+    ]);
+
+    // Editor residue is not something APP_ENV can select; calling it an environment named "bak"
+    // would be a confident lie.
+    expect($files->named('.env.bak'))->toBeNull();
+
+    surgeon_rrmdir($root);
+});
+
+it('flags a documented var missing from an environment file, because Laravel replaces .env', function () {
+    $root = env_tree('env-gap');
+    // .env.testing declares only one of the four documented variables.
+    surgeon_write($root.'/.env.testing', "SERVICE_ENDPOINT=\n");
+
+    $inventory = env_inventory($root);
+
+    expect($inventory->gapsByFile())->toBe([
+        '.env.testing' => ['SERVICE_API_KEY', 'SERVICE_LEGACY_MODE', 'SERVICE_RETRIES'],
+    ]);
+
+    $byName = [];
+    foreach ($inventory->variables as $variable) {
+        $byName[$variable->name] = $variable;
+    }
+
+    expect($byName['SERVICE_RETRIES']->missingFrom)->toBe(['.env.testing'])
+        ->and($byName['SERVICE_RETRIES']->status())->toBe('environment-gap')
+        // Declared in .env.testing, so not a gap there.
+        ->and($byName['SERVICE_ENDPOINT']->missingFrom)->toBe([])
+        ->and($byName['SERVICE_ENDPOINT']->declaredIn)->toBe(['.env.example', '.env', '.env.testing']);
+
+    surgeon_rrmdir($root);
+});
+
+it('does not turn an undocumented var into an environment gap', function () {
+    $root = env_tree('env-gap-gate');
+    surgeon_write($root.'/.env.testing', "SERVICE_ENDPOINT=\n");
+
+    $byName = [];
+    foreach (env_inventory($root)->variables as $variable) {
+        $byName[$variable->name] = $variable;
+    }
+
+    // Read, never documented, absent from .env.testing — but .env.example never claimed it was
+    // required, so the gap is not the repo's own statement being violated. Without this gate every
+    // var a minimal .env.testing omits becomes a finding, which is how a check gets ignored.
+    expect($byName['SERVICE_UNDOCUMENTED_TOKEN']->missingFrom)->toBe([])
+        ->and($byName['SERVICE_UNDOCUMENTED_TOKEN']->status())->toBe('undocumented');
+
+    surgeon_rrmdir($root);
+});
+
+it('names the replace-not-merge rule in the human output', function () {
+    $root = env_tree('env-gap-render');
+    surgeon_write($root.'/.env.testing', "SERVICE_ENDPOINT=\n");
+
+    Artisan::call('surgeon:env', ['--path' => $root, '--matrix' => true]);
+    $output = Artisan::output();
+
+    expect($output)->toContain('loaded INSTEAD of .env when APP_ENV=testing')
+        ->toContain('missing from .env.testing')
+        ->toContain('REPLACES .env, so these are absent at boot, not inherited')
+        ->toContain('declaration matrix');
 
     surgeon_rrmdir($root);
 });
@@ -237,9 +315,11 @@ it('emits the inventory as json', function () {
         'undocumented' => 1,
         'unused' => 1,
         'cache_unsafe' => 1,
+        'environment_gaps' => 0,
         'config_keys' => 1,
     ])
-        ->and($payload['sources'])->toBe(['env_example' => true, 'env' => true]);
+        ->and(array_column($payload['files'], 'role', 'name'))
+        ->toBe(['.env.example' => 'documentation', '.env' => 'base']);
 
     surgeon_rrmdir($root);
 });

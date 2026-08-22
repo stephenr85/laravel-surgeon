@@ -3,8 +3,9 @@
 namespace Rushing\Surgeon\Env;
 
 /**
- * The report: every environment variable a tree reads or declares, reconciled, plus the config keys
- * it reads — what `surgeon:env` renders and what an MCP caller receives.
+ * The report: every environment variable a tree reads or declares, reconciled across every dotenv
+ * file in the repo, plus the config keys it reads — what `surgeon:env` renders and what an MCP
+ * caller receives.
  */
 class EnvInventory
 {
@@ -12,15 +13,13 @@ class EnvInventory
      * @param  string  $root  the tree scanned
      * @param  list<EnvVariable>  $variables  every variable, name-sorted
      * @param  array<string, list<string>>  $config  config key => `path:line` read sites
-     * @param  bool  $exampleExists  whether a `.env.example` was found (absent ≠ documents nothing)
-     * @param  bool  $envExists  whether a local `.env` was found
+     * @param  EnvFileSet  $files  the dotenv files found, classified by boot role
      */
     public function __construct(
         public string $root,
         public array $variables,
         public array $config,
-        public bool $exampleExists,
-        public bool $envExists,
+        public EnvFileSet $files,
     ) {}
 
     /** @return list<EnvVariable> */
@@ -47,6 +46,43 @@ class EnvInventory
         return array_values(array_filter($this->variables, fn (EnvVariable $v) => $v->isCacheUnsafe()));
     }
 
+    /** @return list<EnvVariable> documented as required but absent from an environment file */
+    public function environmentGaps(): array
+    {
+        return array_values(array_filter($this->variables, fn (EnvVariable $v) => $v->hasEnvironmentGap()));
+    }
+
+    /**
+     * The gaps grouped by the environment file that lacks them — the shape the question is actually
+     * asked in ("what is missing under APP_ENV=testing?").
+     *
+     * @return array<string, list<string>> file name => missing variable names
+     */
+    public function gapsByFile(): array
+    {
+        $gaps = [];
+
+        foreach ($this->environmentGaps() as $variable) {
+            foreach ($variable->missingFrom as $file) {
+                $gaps[$file][] = $variable->name;
+            }
+        }
+
+        ksort($gaps, SORT_STRING);
+
+        return $gaps;
+    }
+
+    public function exampleExists(): bool
+    {
+        return $this->files->documentation() !== null;
+    }
+
+    public function envExists(): bool
+    {
+        return $this->files->named('.env') !== null;
+    }
+
     /** @return list<string> the config keys read, sorted */
     public function configKeys(): array
     {
@@ -60,7 +96,10 @@ class EnvInventory
      */
     public function hasFindings(): bool
     {
-        return $this->cacheUnsafe() !== [] || $this->undocumented() !== [] || $this->unused() !== [];
+        return $this->cacheUnsafe() !== []
+            || $this->environmentGaps() !== []
+            || $this->undocumented() !== []
+            || $this->unused() !== [];
     }
 
     /** @return array<string, mixed> */
@@ -68,17 +107,16 @@ class EnvInventory
     {
         return [
             'root' => $this->root,
-            'sources' => [
-                'env_example' => $this->exampleExists,
-                'env' => $this->envExists,
-            ],
+            'files' => array_map(fn (EnvFile $f) => $f->toArray(), $this->files->files),
             'counts' => [
                 'read' => count($this->read()),
                 'undocumented' => count($this->undocumented()),
                 'unused' => count($this->unused()),
                 'cache_unsafe' => count($this->cacheUnsafe()),
+                'environment_gaps' => count($this->environmentGaps()),
                 'config_keys' => count($this->config),
             ],
+            'gaps_by_file' => $this->gapsByFile(),
             'env' => array_map(fn (EnvVariable $v) => $v->toArray(), $this->variables),
             'config' => $this->config,
         ];

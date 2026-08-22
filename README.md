@@ -56,22 +56,68 @@ surgeon:env (…/splicewire/tower)
     MCP_LOCAL_USER_EMAIL  src/Mcp/Servers/SplicewireServer.php:107
 ```
 
-The three-way join is what makes it worth running — reads vs `.env.example` vs `.env`:
+The join across reads and every dotenv file is what makes it worth running:
 
 - **read outside `config/`** — the live bug. `config:cache` stops `.env` from loading, so these return
   null in production and nowhere else. `tests/` is excluded; a suite runs against a live `.env`, so the
   hazard genuinely does not apply there.
+- **missing from an environment file** — see below.
 - **read but not in `.env.example`** — a deployer has no way to know the variable exists.
 - **declared but never read** — dead weight in `.env.example` nobody can prove is safe to delete.
+
+#### Multi-file: Laravel replaces, Symfony merges
+
+This is the one everyone gets wrong on the way in from Symfony.
+`LoadEnvironmentVariables::checkForSpecificEnvironmentFile()` calls `$app->loadEnvironmentFrom($file)`,
+and that setter assigns `$this->environmentFile = $file`. It **swaps the single file**. There is no
+layering, no `.env.local` overlaying `.env`, no per-variable fallback.
+
+So under `APP_ENV=testing` with a `.env.testing` present, `.env` is not read *at all*, and anything
+living only in `.env` is simply absent. That failure has no error message — it looks like a feature
+quietly not working in one environment.
+
+```
+  dotenv files
+    .env.example       documentation, never loaded · declares 4
+    .env               loaded by default · declares 3
+    .env.testing       loaded INSTEAD of .env when APP_ENV=testing · declares 1
+
+  missing from .env.testing (3) — .env.testing REPLACES .env, so these are absent at boot, not inherited
+    MAILGUN_DOMAIN
+    STRIPE_KEY
+    STRIPE_WEBHOOK_SECRET
+```
+
+The gap check is gated on `.env.example` declaring the variable. Without that gate, every variable a
+deliberately-minimal `.env.testing` omits becomes a finding — hundreds of rows, almost all intentional.
+`.env.example` is the repo's own statement of what it needs; a variable it names, missing from an
+environment that exists, is a gap the repo itself defined.
+
+`--matrix` shows the full picture, one row per variable:
+
+```
+  declaration matrix  .env.example · .env · .env.testing
+    ✓ ✓ ✓  DB_HOST
+    ✓ · ·  MAILGUN_DOMAIN
+    · · ·  QUEUE_TUNNEL_URL
+    ✓ ✓ ·  STRIPE_KEY
+```
+
+A name that appears *only* in the local `.env` gets no row — that file is one machine's state, not a
+statement about the application, and personal junk (an editor token, a colleague's tunnel URL) would
+bury the real findings. `phpunit.xml`'s `<env>` elements are a real fourth source for the test
+environment and are deliberately out of scope: they carry a `force` flag with its own precedence rule,
+and folding them in without modelling that faithfully would produce a confident wrong answer.
 
 | | |
 | --- | --- |
 | `--path=` | Root to scan (default: the app base path) |
 | `--example=` / `--env-file=` | Point at other dotenv files (default: `<path>/.env.example`, `<path>/.env`) |
 | `--all` | List every variable with `[rds]` read/documented/set markers, not just findings |
+| `--matrix` | Show which dotenv file declares each variable |
 | `--config` | Also list the config keys read |
 | `--sites` | Show `file:line` for every variable |
-| `--strict` | Exit non-zero if anything is undocumented, unused, or cache-unsafe |
+| `--strict` | Exit non-zero on any finding — undocumented, unused, cache-unsafe, or an environment gap |
 | `--json` | Machine-readable output |
 
 **Accuracy is a floor, not a census.** Only literal first arguments are read, so `env($name)` and

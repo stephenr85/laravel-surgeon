@@ -6,7 +6,7 @@ use InvalidArgumentException;
 
 /**
  * The engine behind `surgeon:env`: scan a tree for the environment variables and config keys it
- * reads, then reconcile the variables against `.env.example` and the local `.env`.
+ * reads, then reconcile the variables against every dotenv file in the repo.
  *
  * A **read** in surgeon's read/write vocabulary — it opens files and writes nothing, which is what
  * lets the MCP surface expose it ungated.
@@ -24,52 +24,81 @@ class EnvInventoryOperation
             throw new InvalidArgumentException("Cannot scan [{$root}]: not a directory.");
         }
 
-        $examplePath ??= $root.'/.env.example';
-        $envPath ??= $root.'/.env';
-
+        $files = EnvFileSet::discover($root, $examplePath, $envPath);
         $scanned = (new EnvScanner)->scanTree($root, $prune);
-        $documented = DotenvKeys::in($examplePath);
-        $set = DotenvKeys::in($envPath);
 
         return new EnvInventory(
             root: $root,
-            variables: $this->reconcile($scanned['env'], $documented, $set),
+            variables: $this->reconcile($scanned['env'], $files),
             config: $scanned['config'],
-            exampleExists: DotenvKeys::exists($examplePath),
-            envExists: DotenvKeys::exists($envPath),
+            files: $files,
         );
     }
 
     /**
-     * Join the three sources on the variable name. The union is deliberate: a variable declared in
-     * `.env.example` and read nowhere is as much a finding as one read and undeclared, so a name from
-     * either side earns a row.
+     * Join the reads against every dotenv file, on the variable name.
      *
-     * A name that appears ONLY in the local `.env` is not a row. Personal `.env` files accumulate
-     * machine-specific junk (an editor's token, a colleague's tunnel URL), and reporting it as a
-     * finding would fill the output with things that are nobody's problem.
+     * The union of "read by code" and "declared by the repo" is deliberate: a variable declared in
+     * `.env.example` and read nowhere is as much a finding as one read and undeclared, so a name from
+     * either side earns a row. {@see EnvFileSet::declaredKeys()} is what keeps a purely local `.env`
+     * name out of that union.
      *
      * @param  array<string, list<string>>  $read  name => sites
-     * @param  list<string>  $documented
-     * @param  list<string>  $set
      * @return list<EnvVariable>
      */
-    private function reconcile(array $read, array $documented, array $set): array
+    private function reconcile(array $read, EnvFileSet $files): array
     {
-        $names = array_values(array_unique([...array_keys($read), ...$documented]));
+        $documentation = $files->documentation();
+        $base = $files->named('.env');
+        $environments = $files->environments();
+
+        $names = array_values(array_unique([...array_keys($read), ...$files->declaredKeys()]));
         sort($names, SORT_STRING);
 
         $variables = [];
 
         foreach ($names as $name) {
+            $documented = $documentation?->declares($name) ?? false;
+
             $variables[] = new EnvVariable(
                 name: $name,
                 sites: $read[$name] ?? [],
-                documented: in_array($name, $documented, true),
-                set: in_array($name, $set, true),
+                documented: $documented,
+                set: $base?->declares($name) ?? false,
+                declaredIn: $files->declaring($name),
+                missingFrom: $this->missingFrom($name, $documented, $environments),
             );
         }
 
         return $variables;
+    }
+
+    /**
+     * The environment files that fail to declare a variable the repo says is required.
+     *
+     * Gated on `.env.example` declaring it, and that gate is doing real work. Without it, every
+     * variable in a 200-line `.env` that a deliberately-minimal `.env.testing` omits becomes a
+     * finding — hundreds of rows, almost all intentional, which is how a check gets ignored.
+     * `.env.example` is the repo's own statement of what it needs; a variable it names, missing from
+     * an environment that exists, is a gap the repo itself defined.
+     *
+     * @param  list<EnvFile>  $environments
+     * @return list<string>
+     */
+    private function missingFrom(string $name, bool $documented, array $environments): array
+    {
+        if (! $documented) {
+            return [];
+        }
+
+        $missing = [];
+
+        foreach ($environments as $file) {
+            if (! $file->declares($name)) {
+                $missing[] = $file->name;
+            }
+        }
+
+        return $missing;
     }
 }

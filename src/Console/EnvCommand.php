@@ -3,6 +3,7 @@
 namespace Rushing\Surgeon\Console;
 
 use Illuminate\Console\Command;
+use Rushing\Surgeon\Env\EnvFile;
 use Rushing\Surgeon\Env\EnvInventory;
 use Rushing\Surgeon\Env\EnvInventoryOperation;
 use Rushing\Surgeon\Env\EnvVariable;
@@ -35,6 +36,7 @@ class EnvCommand extends Command
         {--env-file= : The local dotenv file to check names against (default: <path>/.env)}
         {--prune=* : Extra directory names to skip, beyond vendor/node_modules/.git/storage/build/dist}
         {--all : List every variable, not just the ones with findings}
+        {--matrix : Show which dotenv file declares each variable}
         {--config : Also list the config keys the tree reads}
         {--sites : Show the file:line sites for each variable}
         {--strict : Exit non-zero if anything is undocumented, unused, or cache-unsafe}
@@ -73,11 +75,13 @@ class EnvCommand extends Command
             .'  <fg=gray>·</>  '.count($inventory->variables).' known'
             .'  <fg=gray>·</>  '.count($inventory->config).' config key(s) read');
 
-        if (! $inventory->exampleExists) {
-            $this->line('  <fg=yellow>No .env.example found</> <fg=gray>— nothing to reconcile against; every read reads as undocumented.</>');
-        }
-
         $this->line('');
+        $this->renderFiles($inventory);
+
+        if (! $inventory->exampleExists()) {
+            $this->line('  <fg=yellow>No .env.example found</> <fg=gray>— nothing to reconcile against; every read reads as undocumented.</>');
+            $this->line('');
+        }
 
         $this->section(
             $inventory->cacheUnsafe(),
@@ -85,6 +89,8 @@ class EnvCommand extends Command
             'these return NULL once config:cache runs — i.e. in production',
             outsideOnly: true,
         );
+
+        $this->renderGaps($inventory);
 
         $this->section(
             $inventory->undocumented(),
@@ -106,6 +112,10 @@ class EnvCommand extends Command
             $this->line('');
         }
 
+        if ($this->option('matrix')) {
+            $this->renderMatrix($inventory);
+        }
+
         if ($this->option('config')) {
             $this->line('  <options=bold>config keys read</> <fg=gray>(literal reads only — a dynamic key cannot be seen)</>');
             foreach ($inventory->config as $key => $sites) {
@@ -118,6 +128,82 @@ class EnvCommand extends Command
             $this->line('  <fg=green>Nothing to reconcile — reads, .env.example and .env agree.</>');
             $this->line('');
         }
+    }
+
+    /**
+     * The dotenv roster, with the boot rule spelled out — because "replaces" rather than "merges" is
+     * the one thing that makes the gap section below mean anything, and it is the opposite of what
+     * Symfony does.
+     */
+    private function renderFiles(EnvInventory $inventory): void
+    {
+        if ($inventory->files->files === []) {
+            return;
+        }
+
+        $this->line('  <options=bold>dotenv files</>');
+
+        foreach ($inventory->files->files as $file) {
+            $role = match ($file->role) {
+                EnvFile::DOCUMENTATION => 'documentation, never loaded',
+                EnvFile::BASE => 'loaded by default',
+                default => 'loaded INSTEAD of .env when APP_ENV='.$file->environment,
+            };
+
+            $this->line('    '.str_pad($file->name, 18).' <fg=gray>'.$role.' · declares '.count($file->keys).'</>');
+        }
+
+        $this->line('');
+    }
+
+    /**
+     * Variables `.env.example` says are required but an environment file omits. Grouped by file,
+     * because that is how the question gets asked.
+     */
+    private function renderGaps(EnvInventory $inventory): void
+    {
+        $gaps = $inventory->gapsByFile();
+
+        if ($gaps === []) {
+            return;
+        }
+
+        foreach ($gaps as $file => $names) {
+            $this->line('  <fg=red>missing from '.$file.'</> <fg=gray>('.count($names).')</> <fg=gray>— '
+                .$file.' REPLACES .env, so these are absent at boot, not inherited</>');
+
+            foreach ($names as $name) {
+                $this->line('    '.$name);
+            }
+
+            $this->line('');
+        }
+    }
+
+    /** Which file declares what — the multi-file view, one row per variable. */
+    private function renderMatrix(EnvInventory $inventory): void
+    {
+        $names = array_map(fn (EnvFile $f) => $f->name, $inventory->files->files);
+
+        if ($names === []) {
+            return;
+        }
+
+        $this->line('  <options=bold>declaration matrix</> <fg=gray>'.implode(' · ', $names).'</>');
+
+        foreach ($inventory->variables as $variable) {
+            $cells = [];
+
+            foreach ($names as $name) {
+                $cells[] = in_array($name, $variable->declaredIn, true)
+                    ? '<fg=green>✓</>'
+                    : '<fg=gray>·</>';
+            }
+
+            $this->line('    '.implode(' ', $cells).'  '.$variable->name);
+        }
+
+        $this->line('');
     }
 
     /**
