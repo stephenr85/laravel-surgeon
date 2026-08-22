@@ -14,12 +14,14 @@ class EnvInventory
      * @param  list<EnvVariable>  $variables  every variable, name-sorted
      * @param  array<string, list<string>>  $config  config key => `path:line` read sites
      * @param  EnvFileSet  $files  the dotenv files found, classified by boot role
+     * @param  ViteEnv  $vite  whether a Vite front end is present, and which prefixes it exposes
      */
     public function __construct(
         public string $root,
         public array $variables,
         public array $config,
         public EnvFileSet $files,
+        public ViteEnv $vite,
     ) {}
 
     /** @return list<EnvVariable> */
@@ -83,6 +85,12 @@ class EnvInventory
         return $this->files->named('.env') !== null;
     }
 
+    /** @return list<EnvVariable> variables the Vite front end can read */
+    public function viteExposed(): array
+    {
+        return array_values(array_filter($this->variables, fn (EnvVariable $v) => $v->exposedToVite));
+    }
+
     /** @return list<string> the config keys read, sorted */
     public function configKeys(): array
     {
@@ -108,6 +116,7 @@ class EnvInventory
         return [
             'root' => $this->root,
             'files' => array_map(fn (EnvFile $f) => $f->toArray(), $this->files->files),
+            'vite' => $this->vite->toArray(),
             'counts' => [
                 'read' => count($this->read()),
                 'undocumented' => count($this->undocumented()),

@@ -101,6 +101,87 @@ class EnvScanner
     }
 
     /**
+     * The environment variables the CLIENT bundle reads — `import.meta.env.VITE_X` and
+     * `process.env.VITE_X` across the front-end sources.
+     *
+     * Without this the inventory gives actively wrong advice. A `VITE_MAP_TOKEN` declared in
+     * `.env.example` and read only from a Vue component has no PHP read site, so it lands under
+     * "declared but never read — candidates for deletion" and the report cheerfully recommends
+     * deleting a live variable. A tool that has never opened a `.ts` file must not draw conclusions
+     * about what `.ts` files use.
+     *
+     * Regex rather than a JS parser, and the docblock says so: this is a PHP package and shipping a
+     * JS toolchain to read four identifiers would cost more than the precision is worth. The two call
+     * shapes above are what Vite's own docs prescribe, and a computed access
+     * (`import.meta.env[key]`) is invisible — the same literal-only floor the PHP side already
+     * declares.
+     *
+     * @param  list<string>  $prune
+     * @return array<string, list<string>> name => `path:line` sites
+     */
+    public function scanClient(string $root, array $prune = []): array
+    {
+        $root = rtrim($root, '/');
+        $pruned = array_values(array_unique([...self::PRUNED, ...$prune]));
+        $found = [];
+
+        foreach ($this->clientFiles($root, $pruned) as $absolute) {
+            $source = @file_get_contents($absolute);
+
+            if ($source === false || ! str_contains($source, '.env')) {
+                continue;
+            }
+
+            $relative = substr($absolute, strlen($root) + 1);
+
+            foreach (self::clientReadsIn($source) as $name => $lines) {
+                foreach ($lines as $line) {
+                    $found[$name][] = $relative.':'.$line;
+                }
+            }
+        }
+
+        return self::normalize($found);
+    }
+
+    /**
+     * @return array<string, list<int>> name => lines
+     */
+    public static function clientReadsIn(string $source): array
+    {
+        $pattern = '/(?:import\s*\.\s*meta\s*\.\s*env|process\s*\.\s*env)\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_]*)|\[\s*[\'"]([A-Za-z_][A-Za-z0-9_]*)[\'"]\s*\])/';
+
+        if (preg_match_all($pattern, $source, $matches, PREG_OFFSET_CAPTURE) === 0) {
+            return [];
+        }
+
+        $found = [];
+
+        foreach ($matches[0] as $index => $match) {
+            $name = $matches[1][$index][0] !== '' ? $matches[1][$index][0] : $matches[2][$index][0];
+
+            if ($name === '') {
+                continue;
+            }
+
+            $found[$name][] = substr_count($source, "\n", 0, $match[1]) + 1;
+        }
+
+        return self::sortLines($found);
+    }
+
+    /**
+     * The front-end sources under the root.
+     *
+     * @param  list<string>  $prune
+     * @return list<string>
+     */
+    private function clientFiles(string $root, array $prune): array
+    {
+        return $this->filesWithExtensions($root, $prune, ['js', 'mjs', 'cjs', 'jsx', 'ts', 'mts', 'cts', 'tsx', 'vue', 'svelte']);
+    }
+
+    /**
      * The symbols read in one file's source, mapped to the lines reading them.
      *
      * Recognized shapes, all requiring a literal string first argument:
@@ -174,14 +255,26 @@ class EnvScanner
     /**
      * Every PHP file under the root, pruned dirs skipped.
      *
+     * @param  list<string>  $prune
+     * @return list<string>
+     */
+    private function phpFiles(string $root, array $prune): array
+    {
+        return $this->filesWithExtensions($root, $prune, ['php']);
+    }
+
+    /**
+     * Files under the root with any of the given extensions, pruned dirs skipped.
+     *
      * The prune decision is a *descent* filter, not a post-hoc path match: `vendor/` and
      * `node_modules/` are the two largest trees in an estate, and a walk that enumerates them only to
      * discard them is the difference between a report that feels instant and one nobody runs twice.
      *
      * @param  list<string>  $prune
+     * @param  list<string>  $extensions
      * @return list<string>
      */
-    private function phpFiles(string $root, array $prune): array
+    private function filesWithExtensions(string $root, array $prune, array $extensions): array
     {
         if (! is_dir($root)) {
             return [];
@@ -202,7 +295,7 @@ class EnvScanner
 
         /** @var SplFileInfo $item */
         foreach (new RecursiveIteratorIterator($filtered) as $item) {
-            if ($item->isFile() && $item->getExtension() === 'php') {
+            if ($item->isFile() && in_array($item->getExtension(), $extensions, true)) {
                 $paths[] = $item->getPathname();
             }
         }

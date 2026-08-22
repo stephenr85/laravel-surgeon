@@ -65,33 +65,59 @@ The join across reads and every dotenv file is what makes it worth running:
 - **read but not in `.env.example`** — a deployer has no way to know the variable exists.
 - **declared but never read** — dead weight in `.env.example` nobody can prove is safe to delete.
 
-#### Multi-file: Laravel replaces, Symfony merges
+#### Multi-file: PHP swaps, JS merges — same files, opposite rules
 
-This is the one everyone gets wrong on the way in from Symfony.
-`LoadEnvironmentVariables::checkForSpecificEnvironmentFile()` calls `$app->loadEnvironmentFrom($file)`,
-and that setter assigns `$this->environmentFile = $file`. It **swaps the single file**. There is no
-layering, no `.env.local` overlaying `.env`, no per-variable fallback.
+Laravel and Vite read the *same* `.env` files with *opposite* multi-file semantics, so one file is two
+different things depending on who is reading it.
 
-So under `APP_ENV=testing` with a `.env.testing` present, `.env` is not read *at all*, and anything
-living only in `.env` is simply absent. That failure has no error message — it looks like a feature
-quietly not working in one environment.
+**Laravel replaces.** `LoadEnvironmentVariables::checkForSpecificEnvironmentFile()` calls
+`$app->loadEnvironmentFrom($file)`, and that setter assigns `$this->environmentFile = $file` — it swaps
+the single file. Under `APP_ENV=testing` with a `.env.testing` present, `.env` is not read *at all*.
+(Verified by booting the framework, not by reading it: a variable declared only in `.env` comes back
+`NULL`.)
+
+**Vite merges.** `getEnvFilesForMode()` returns `.env`, `.env.local`, `.env.${mode}`,
+`.env.${mode}.local`, and `loadEnv()` flat-maps all four into one object — later file wins per key,
+every key from `.env` survives unless overridden.
+
+So `.env.local` is simultaneously the `APP_ENV=local` file (Laravel) and an always-merged override
+(Vite). Both readings are right, and every file is reported on both axes:
 
 ```
-  dotenv files
-    .env.example       documentation, never loaded · declares 4
-    .env               loaded by default · declares 3
-    .env.testing       loaded INSTEAD of .env when APP_ENV=testing · declares 1
+  dotenv files (PHP: Laravel SWAPS files · JS: Vite MERGES them)
+    .env.example       php:  documentation, never loaded · declares 4
+                       vite: not read by Vite
+    .env               php:  loaded by default · declares 3
+                       vite: merged into every build
+    .env.production    php:  loaded INSTEAD of .env when APP_ENV=production · declares 1
+                       vite: merged in on --mode=production
 
-  missing from .env.testing (3) — .env.testing REPLACES .env, so these are absent at boot, not inherited
-    MAILGUN_DOMAIN
-    STRIPE_KEY
-    STRIPE_WEBHOOK_SECRET
+    Vite exposes VITE_*, APP_* — envPrefix in vite.config.ts. Those follow the merge rules, not the swap.
+
+  missing from .env.production (2) — .env.production REPLACES .env for PHP, so these are absent at boot
+    APP_NAME
+    VITE_MAP_TOKEN
 ```
 
-The gap check is gated on `.env.example` declaring the variable. Without that gate, every variable a
-deliberately-minimal `.env.testing` omits becomes a finding — hundreds of rows, almost all intentional.
-`.env.example` is the repo's own statement of what it needs; a variable it names, missing from an
-environment that exists, is a gap the repo itself defined.
+Which rules apply is a property of the **reader**, not the file. A variable Vite exposes and PHP never
+reads follows the merge rules, so its absence from `.env.production` is inheritance, not a gap. A
+variable PHP reads follows the swap — even when it also carries a Vite prefix, because the gap is real
+for that reader whatever the other one does.
+
+The prefix set is **read from `envPrefix` in the vite config**, not assumed. Widening it
+(`envPrefix: ['VITE_', 'APP_']`) is exactly the case a hardcoded `VITE_` would misclassify — and it
+would misclassify the variables someone went out of their way to expose. A repo with no Vite gets no
+Vite semantics at all.
+
+`surgeon:env` also scans the front end (`.ts`, `.tsx`, `.vue`, `.svelte`, …) for `import.meta.env.X`
+and `process.env.X`. Without that, every front-end variable in a Laravel+Vite repo has no PHP read site
+and lands under "declared but never read — candidates for deletion", so the report recommends deleting
+live config. A tool that has never opened a `.ts` file must not draw conclusions about what `.ts` files
+use. That scan is regex-based, and only runs when the repo actually has Vite.
+
+The environment-gap check is gated on `.env.example` declaring the variable. Without that gate, every
+variable a deliberately-minimal `.env.testing` omits becomes a finding — hundreds of rows, almost all
+intentional. `.env.example` is the repo's own statement of what it needs.
 
 `--matrix` shows the full picture, one row per variable:
 
@@ -105,7 +131,7 @@ environment that exists, is a gap the repo itself defined.
 
 A name that appears *only* in the local `.env` gets no row — that file is one machine's state, not a
 statement about the application, and personal junk (an editor token, a colleague's tunnel URL) would
-bury the real findings. `phpunit.xml`'s `<env>` elements are a real fourth source for the test
+bury the real findings. `phpunit.xml`'s `<env>` elements are a real further source for the test
 environment and are deliberately out of scope: they carry a `force` flag with its own precedence rule,
 and folding them in without modelling that faithfully would produce a confident wrong answer.
 
@@ -113,7 +139,7 @@ and folding them in without modelling that faithfully would produce a confident 
 | --- | --- |
 | `--path=` | Root to scan (default: the app base path) |
 | `--example=` / `--env-file=` | Point at other dotenv files (default: `<path>/.env.example`, `<path>/.env`) |
-| `--all` | List every variable with `[rds]` read/documented/set markers, not just findings |
+| `--all` | List every variable with `[rdsv]` read/documented/set/vite-exposed markers |
 | `--matrix` | Show which dotenv file declares each variable |
 | `--config` | Also list the config keys read |
 | `--sites` | Show `file:line` for every variable |

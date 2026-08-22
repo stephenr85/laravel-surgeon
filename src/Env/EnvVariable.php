@@ -27,9 +27,10 @@ class EnvVariable
      * @param  bool  $documented  declared in `.env.example`
      * @param  bool  $set  present in the local `.env` (name only — never the value)
      * @param  list<string>  $declaredIn  every dotenv file declaring it, by basename, in role order
-     * @param  list<string>  $missingFrom  environment files that do NOT declare it — where it is
-     *                                     absent at boot, because Laravel swaps the file rather
-     *                                     than layering it ({@see EnvFileSet})
+     * @param  list<string>  $missingFrom  environment files where it is genuinely absent, judged under
+     *                                     the semantics of whoever reads it ({@see EnvInventoryOperation})
+     * @param  bool  $exposedToVite  matches a Vite env prefix, so the front end *could* read it
+     * @param  list<string>  $clientSites  `path:line` sites in front-end sources reading it
      */
     public function __construct(
         public string $name,
@@ -38,9 +39,38 @@ class EnvVariable
         public bool $set = false,
         public array $declaredIn = [],
         public array $missingFrom = [],
+        public bool $exposedToVite = false,
+        public array $clientSites = [],
     ) {}
 
+    /**
+     * Who reads this variable — `php`, `vite`, or both. A variable can be exposed to the front end
+     * *and* read by config, and then both sets of multi-file rules apply to the same name.
+     *
+     * @return list<string>
+     */
+    public function consumers(): array
+    {
+        $consumers = [];
+
+        if ($this->readByPhp()) {
+            $consumers[] = 'php';
+        }
+
+        if ($this->clientSites !== []) {
+            $consumers[] = 'vite';
+        }
+
+        return $consumers;
+    }
+
+    /** Read anywhere — PHP or the client bundle. */
     public function isRead(): bool
+    {
+        return $this->sites !== [] || $this->clientSites !== [];
+    }
+
+    public function readByPhp(): bool
     {
         return $this->sites !== [];
     }
@@ -51,7 +81,13 @@ class EnvVariable
         return $this->isRead() && ! $this->documented;
     }
 
-    /** Declared in `.env.example` but read nowhere — a candidate for deletion. */
+    /**
+     * Declared in `.env.example` but read nowhere — a candidate for deletion.
+     *
+     * "Nowhere" spans both languages deliberately. Judged on PHP sites alone, every front-end
+     * variable in a Laravel+Vite repo lands here and the report recommends deleting live config,
+     * because a `VITE_MAP_TOKEN` used only from a Vue component has no PHP read site at all.
+     */
     public function isUnused(): bool
     {
         return ! $this->isRead() && $this->documented;
@@ -121,9 +157,11 @@ class EnvVariable
             'read' => $this->isRead(),
             'documented' => $this->documented,
             'set' => $this->set,
+            'consumers' => $this->consumers(),
             'declared_in' => $this->declaredIn,
             'missing_from' => $this->missingFrom,
             'sites' => $this->sites,
+            'client_sites' => $this->clientSites,
             'reads_outside_config' => $this->readsOutsideConfig(),
         ];
     }

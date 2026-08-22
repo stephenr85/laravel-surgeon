@@ -25,13 +25,18 @@ class EnvInventoryOperation
         }
 
         $files = EnvFileSet::discover($root, $examplePath, $envPath);
-        $scanned = (new EnvScanner)->scanTree($root, $prune);
+        $vite = ViteEnv::discover($root);
+        $scanner = new EnvScanner;
+        $scanned = $scanner->scanTree($root, $prune);
+        // Only walk the front end when there is one — a backend-only package pays nothing.
+        $clientReads = $vite->present ? $scanner->scanClient($root, $prune) : [];
 
         return new EnvInventory(
             root: $root,
-            variables: $this->reconcile($scanned['env'], $files),
+            variables: $this->reconcile($scanned['env'], $clientReads, $files, $vite),
             config: $scanned['config'],
             files: $files,
+            vite: $vite,
         );
     }
 
@@ -43,16 +48,21 @@ class EnvInventoryOperation
      * either side earns a row. {@see EnvFileSet::declaredKeys()} is what keeps a purely local `.env`
      * name out of that union.
      *
-     * @param  array<string, list<string>>  $read  name => sites
+     * @param  array<string, list<string>>  $read  name => PHP sites
+     * @param  array<string, list<string>>  $clientReads  name => front-end sites
      * @return list<EnvVariable>
      */
-    private function reconcile(array $read, EnvFileSet $files): array
+    private function reconcile(array $read, array $clientReads, EnvFileSet $files, ViteEnv $vite): array
     {
         $documentation = $files->documentation();
         $base = $files->named('.env');
         $environments = $files->environments();
 
-        $names = array_values(array_unique([...array_keys($read), ...$files->declaredKeys()]));
+        $names = array_values(array_unique([
+            ...array_keys($read),
+            ...array_keys($clientReads),
+            ...$files->declaredKeys(),
+        ]));
         sort($names, SORT_STRING);
 
         $variables = [];
@@ -60,13 +70,18 @@ class EnvInventoryOperation
         foreach ($names as $name) {
             $documented = $documentation?->declares($name) ?? false;
 
+            $sites = $read[$name] ?? [];
+            $exposedToVite = $vite->exposes($name);
+
             $variables[] = new EnvVariable(
                 name: $name,
-                sites: $read[$name] ?? [],
+                sites: $sites,
                 documented: $documented,
                 set: $base?->declares($name) ?? false,
                 declaredIn: $files->declaring($name),
-                missingFrom: $this->missingFrom($name, $documented, $environments),
+                missingFrom: $this->missingFrom($name, $documented, $environments, $files, $exposedToVite, $sites !== []),
+                exposedToVite: $exposedToVite,
+                clientSites: $clientReads[$name] ?? [],
             );
         }
 
@@ -82,19 +97,36 @@ class EnvInventoryOperation
      * `.env.example` is the repo's own statement of what it needs; a variable it names, missing from
      * an environment that exists, is a gap the repo itself defined.
      *
+     * ## Which semantics apply is a property of the READER, not the file
+     * A variable Vite exposes and PHP never reads follows Vite's merge rules, so its absence from
+     * `.env.production` is inheritance, not a gap — {@see EnvFileSet::viteInherits()}. A variable PHP
+     * reads follows Laravel's swap, even when it also carries a Vite prefix: the stricter reader wins,
+     * because the gap is real for that reader whatever the other one does.
+     *
      * @param  list<EnvFile>  $environments
      * @return list<string>
      */
-    private function missingFrom(string $name, bool $documented, array $environments): array
-    {
+    private function missingFrom(
+        string $name,
+        bool $documented,
+        array $environments,
+        EnvFileSet $files,
+        bool $exposedToVite,
+        bool $readByPhp,
+    ): array {
         if (! $documented) {
             return [];
         }
 
+        $viteOnly = $exposedToVite && ! $readByPhp;
         $missing = [];
 
         foreach ($environments as $file) {
-            if (! $file->declares($name)) {
+            $present = $viteOnly
+                ? $files->viteInherits($name, $file)
+                : $file->declares($name);
+
+            if (! $present) {
                 $missing[] = $file->name;
             }
         }

@@ -5,6 +5,7 @@ use Rushing\Surgeon\Env\DotenvKeys;
 use Rushing\Surgeon\Env\EnvInventory;
 use Rushing\Surgeon\Env\EnvInventoryOperation;
 use Rushing\Surgeon\Env\EnvScanner;
+use Rushing\Surgeon\Env\ViteEnv;
 
 /**
  * `surgeon:env` — the environment inventory. What is worth pinning is the three-way join (read /
@@ -245,8 +246,179 @@ it('names the replace-not-merge rule in the human output', function () {
 
     expect($output)->toContain('loaded INSTEAD of .env when APP_ENV=testing')
         ->toContain('missing from .env.testing')
-        ->toContain('REPLACES .env, so these are absent at boot, not inherited')
+        ->toContain('REPLACES .env for PHP, so these are absent at boot, not inherited')
         ->toContain('declaration matrix');
+
+    surgeon_rrmdir($root);
+});
+
+it('reads envPrefix out of the vite config instead of assuming VITE_', function () {
+    $root = surgeon_tmp('env-vite-prefix');
+    surgeon_write($root.'/vite.config.ts', <<<'TS'
+        import { defineConfig } from 'vite';
+
+        export default defineConfig({
+            envPrefix: ['VITE_', 'APP_'],
+            plugins: [],
+        });
+        TS);
+
+    $vite = ViteEnv::discover($root);
+
+    expect($vite->present)->toBeTrue()
+        ->and($vite->prefixes)->toBe(['VITE_', 'APP_'])
+        ->and($vite->prefixSource)->toBe('config')
+        // The widened prefix is exactly the case hardcoding VITE_ would misclassify.
+        ->and($vite->exposes('APP_NAME'))->toBeTrue()
+        ->and($vite->exposes('STRIPE_KEY'))->toBeFalse();
+
+    surgeon_rrmdir($root);
+});
+
+it('falls back to the documented default, and says which it used', function () {
+    $bare = surgeon_tmp('env-vite-default');
+    surgeon_write($bare.'/vite.config.js', "export default { plugins: [] };\n");
+
+    expect(ViteEnv::discover($bare)->prefixes)->toBe(['VITE_'])
+        ->and(ViteEnv::discover($bare)->prefixSource)->toBe('default');
+
+    // A single-string envPrefix is the other documented form.
+    $single = surgeon_tmp('env-vite-single');
+    surgeon_write($single.'/vite.config.ts', "export default { envPrefix: 'PUBLIC_' };\n");
+
+    expect(ViteEnv::discover($single)->prefixes)->toBe(['PUBLIC_']);
+
+    // vite in package.json counts even with no root config.
+    $pkg = surgeon_tmp('env-vite-pkg');
+    surgeon_write($pkg.'/package.json', '{"devDependencies":{"vite":"^7.0"}}');
+
+    expect(ViteEnv::discover($pkg)->present)->toBeTrue();
+
+    surgeon_rrmdir($bare);
+    surgeon_rrmdir($single);
+    surgeon_rrmdir($pkg);
+});
+
+it('applies no Vite semantics to a repo with no front end', function () {
+    $root = env_tree('env-vite-absent');
+
+    $vite = env_inventory($root)->vite;
+
+    // A backend-only package must not inherit a front-end tool's rules.
+    expect($vite->present)->toBeFalse()
+        ->and($vite->exposes('VITE_ANYTHING'))->toBeFalse();
+
+    surgeon_rrmdir($root);
+});
+
+it('classifies one file on both axes, because Laravel and Vite disagree about it', function () {
+    $root = env_tree('env-both-axes');
+    surgeon_write($root.'/vite.config.ts', "export default { plugins: [] };\n");
+    surgeon_write($root.'/.env.local', "SERVICE_ENDPOINT=\n");
+    surgeon_write($root.'/.env.production', "SERVICE_ENDPOINT=\n");
+    surgeon_write($root.'/.env.production.local', "SERVICE_ENDPOINT=\n");
+
+    $files = env_inventory($root)->files;
+
+    // .env.local is the sharpest case: APP_ENV=local to Laravel, an always-merged override to Vite.
+    expect([$files->named('.env.local')->environment, $files->named('.env.local')->viteRole])
+        ->toBe(['local', 'always'])
+        ->and($files->named('.env.local')->viteLocal)->toBeTrue()
+        // .local is peeled off before reading the mode, or the mode would be "production.local".
+        ->and([$files->named('.env.production.local')->viteMode, $files->named('.env.production.local')->viteLocal])
+        ->toBe(['production', true])
+        ->and($files->named('.env')->viteRole)->toBe('always')
+        ->and($files->named('.env.example')->viteRole)->toBe('none');
+
+    surgeon_rrmdir($root);
+});
+
+it('does not call a vite-only var missing when vite would merge it from .env', function () {
+    $root = surgeon_tmp('env-vite-inherit');
+    surgeon_write($root.'/vite.config.ts', "export default { plugins: [] };\n");
+    surgeon_write($root.'/config/app.php', "<?php\n\nreturn ['k' => env('STRIPE_KEY')];\n");
+    surgeon_write($root.'/.env.example', "STRIPE_KEY=\nVITE_APP_NAME=\nVITE_ONLY_HERE=\n");
+    surgeon_write($root.'/.env', "STRIPE_KEY=\nVITE_APP_NAME=\n");
+    surgeon_write($root.'/.env.production', "STRIPE_KEY=\n");
+    surgeon_write($root.'/resources/js/app.ts', "const n = import.meta.env.VITE_APP_NAME;\nconst o = import.meta.env.VITE_ONLY_HERE;\n");
+
+    $byName = [];
+    foreach (env_inventory($root)->variables as $variable) {
+        $byName[$variable->name] = $variable;
+    }
+
+    // VITE_APP_NAME is absent from .env.production but Vite merges it in from .env — not a gap.
+    expect($byName['VITE_APP_NAME']->missingFrom)->toBe([])
+        ->and($byName['VITE_APP_NAME']->consumers())->toBe(['vite'])
+        // …whereas one declared nowhere Vite loads really is missing.
+        ->and($byName['VITE_ONLY_HERE']->missingFrom)->toBe(['.env.production'])
+        // STRIPE_KEY is read by PHP, so the strict swap semantics apply — and it is present.
+        ->and($byName['STRIPE_KEY']->consumers())->toBe(['php']);
+
+    surgeon_rrmdir($root);
+});
+
+it('applies the stricter PHP semantics when both readers want the same var', function () {
+    $root = surgeon_tmp('env-vite-both');
+    surgeon_write($root.'/vite.config.ts', "export default { envPrefix: ['VITE_', 'APP_'] };\n");
+    // APP_NAME is exposed to Vite by the widened prefix AND read by PHP config.
+    surgeon_write($root.'/config/app.php', "<?php\n\nreturn ['n' => env('APP_NAME')];\n");
+    surgeon_write($root.'/resources/js/app.ts', "document.title = import.meta.env.APP_NAME;\n");
+    surgeon_write($root.'/.env.example', "APP_NAME=\n");
+    surgeon_write($root.'/.env', "APP_NAME=\n");
+    surgeon_write($root.'/.env.production', "OTHER=\n");
+
+    $byName = [];
+    foreach (env_inventory($root)->variables as $variable) {
+        $byName[$variable->name] = $variable;
+    }
+
+    // Vite would inherit it from .env; PHP would not, because .env.production replaces .env.
+    // The gap is real for PHP whatever Vite does, so it is reported.
+    expect($byName['APP_NAME']->consumers())->toBe(['php', 'vite'])
+        ->and($byName['APP_NAME']->missingFrom)->toBe(['.env.production']);
+
+    surgeon_rrmdir($root);
+});
+
+it('reads the client bundle, so a front-end var is not called dead', function () {
+    $root = surgeon_tmp('env-client');
+    surgeon_write($root.'/vite.config.ts', "export default { plugins: [] };\n");
+    surgeon_write($root.'/.env.example', "VITE_MAP_TOKEN=\nVITE_TRULY_DEAD=\n");
+    surgeon_write($root.'/resources/js/Map.vue', <<<'VUE'
+        <script setup lang="ts">
+        const token = import.meta.env.VITE_MAP_TOKEN;
+        const alt = import.meta.env['VITE_MAP_TOKEN'];
+        </script>
+        VUE);
+
+    $inventory = env_inventory($root);
+    $byName = [];
+    foreach ($inventory->variables as $variable) {
+        $byName[$variable->name] = $variable;
+    }
+
+    // Read only from a .vue file — no PHP site at all. Judged on PHP alone it would be reported as
+    // a deletion candidate, and the report would be telling you to delete live config.
+    expect($byName['VITE_MAP_TOKEN']->isUnused())->toBeFalse()
+        ->and($byName['VITE_MAP_TOKEN']->readByPhp())->toBeFalse()
+        ->and($byName['VITE_MAP_TOKEN']->consumers())->toBe(['vite'])
+        ->and($byName['VITE_MAP_TOKEN']->clientSites)
+        ->toBe(['resources/js/Map.vue:2', 'resources/js/Map.vue:3'])
+        // …while one nothing reads on either side is still honestly dead.
+        ->and($byName['VITE_TRULY_DEAD']->isUnused())->toBeTrue();
+
+    surgeon_rrmdir($root);
+});
+
+it('does not walk the front end when the repo has none', function () {
+    $root = env_tree('env-client-absent');
+    // A .js file exists but there is no Vite, so it is never opened.
+    surgeon_write($root.'/public/legacy.js', "const x = import.meta.env.VITE_GHOST;\n");
+
+    $names = array_map(fn ($v) => $v->name, env_inventory($root)->variables);
+
+    expect($names)->not->toContain('VITE_GHOST');
 
     surgeon_rrmdir($root);
 });

@@ -18,6 +18,12 @@ namespace Rushing\Surgeon\Env;
  * working in one environment. Symfony's `debug:dotenv` cannot express it because Symfony's own
  * semantics are a merge cascade, so the question does not arise there.
  *
+ * ## Vite is the opposite, on the same files
+ * A Laravel+Vite repo reads one `.env.production` two ways: Laravel swaps to it, Vite MERGES it over
+ * `.env`. So each file is classified on both axes ({@see EnvFile}), and {@see viteInherits()} answers
+ * the merge-side question the Laravel-side gap check must not be asked about front-end variables.
+ * {@see ViteEnv} decides which variables those are.
+ *
  * Only the `.env*` family is read here. `phpunit.xml`'s `<env>` elements are a real fourth source
  * for the test environment and are deliberately out of scope for now — they are XML, they carry a
  * `force` flag with its own precedence rule, and folding them in without modelling that faithfully
@@ -70,6 +76,28 @@ class EnvFileSet
     public function environments(): array
     {
         return array_values(array_filter($this->files, fn (EnvFile $f) => $f->isEnvironment()));
+    }
+
+    /**
+     * Whether a variable reaches a Vite build that selected `$file`'s mode — true if `$file` declares
+     * it, or if any always-merged file (`.env`, `.env.local`) does.
+     *
+     * This is the whole difference from the Laravel axis: under Vite the base file is still there, so
+     * a variable absent from `.env.production` but present in `.env` is inherited, not missing.
+     */
+    public function viteInherits(string $variable, EnvFile $file): bool
+    {
+        if ($file->declares($variable)) {
+            return true;
+        }
+
+        foreach ($this->files as $candidate) {
+            if ($candidate->isViteAlways() && $candidate->declares($variable)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function documentation(): ?EnvFile
@@ -170,20 +198,43 @@ class EnvFileSet
         return $kept;
     }
 
+    /**
+     * Classify one file on BOTH axes at once.
+     *
+     * The Laravel axis reads the suffix as an `APP_ENV` value; the Vite axis reads it as a `--mode`,
+     * with `.local` peeled off first because Vite treats that as an override layer rather than part of
+     * the mode name. `.env.local` therefore lands as `APP_ENV=local` to Laravel and as an
+     * always-merged override to Vite — both true, which is the whole reason for two axes.
+     */
     private static function classify(string $path, string $examplePath, string $basePath): EnvFile
     {
         $name = basename($path);
         $keys = DotenvKeys::in($path);
 
         if ($path === $examplePath || str_ends_with($name, '.example')) {
-            return new EnvFile($path, $name, EnvFile::DOCUMENTATION, null, $keys);
+            return new EnvFile($path, $name, EnvFile::DOCUMENTATION, null, EnvFile::VITE_NONE, null, false, $keys);
         }
 
         if ($path === $basePath) {
-            return new EnvFile($path, $name, EnvFile::BASE, null, $keys);
+            return new EnvFile($path, $name, EnvFile::BASE, null, EnvFile::VITE_ALWAYS, null, false, $keys);
         }
 
-        return new EnvFile($path, $name, EnvFile::ENVIRONMENT, substr($name, 5), $keys);
+        $suffix = substr($name, 5);
+
+        // `.env.local` is Vite's always-loaded override; `.env.production.local` is mode-scoped. The
+        // bare case needs its own branch — its suffix is `local`, not `.local`, so a suffix test alone
+        // reads it as a mode named "local".
+        [$local, $mode] = match (true) {
+            $suffix === 'local' => [true, ''],
+            str_ends_with($suffix, '.local') => [true, substr($suffix, 0, -6)],
+            default => [false, $suffix],
+        };
+
+        [$viteRole, $viteMode] = $mode === ''
+            ? [EnvFile::VITE_ALWAYS, null]
+            : [EnvFile::VITE_MODE, $mode];
+
+        return new EnvFile($path, $name, EnvFile::ENVIRONMENT, $suffix, $viteRole, $viteMode, $local, $keys);
     }
 
     private static function order(EnvFile $file): int

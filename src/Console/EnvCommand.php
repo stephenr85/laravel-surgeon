@@ -22,6 +22,11 @@ use Rushing\Surgeon\Env\EnvVariable;
  * **read outside `config/`** — which is a live bug, because `config:cache` stops `.env` from loading
  * and those calls return null in production and nowhere else.
  *
+ * Multi-file semantics are reported per READER, because Laravel and Vite disagree about the same
+ * files: Laravel swaps to `.env.{APP_ENV}`, Vite merges `.env` + `.env.local` + `.env.{mode}` +
+ * `.env.{mode}.local`. {@see \Rushing\Surgeon\Env\ViteEnv} decides which variables follow which,
+ * reading `envPrefix` from the vite config rather than assuming `VITE_`.
+ *
  * A pure read, and also an MCP tool with no further code: {@see \Rushing\Surgeon\Mcp\SurgeonMcpServer}
  * reflects every `surgeon:*` command, and this falls into the default read-only branch.
  *
@@ -141,16 +146,29 @@ class EnvCommand extends Command
             return;
         }
 
-        $this->line('  <options=bold>dotenv files</>');
+        $vite = $inventory->vite;
+
+        $this->line('  <options=bold>dotenv files</> <fg=gray>(PHP: Laravel SWAPS files'
+            .($vite->present ? ' · JS: Vite MERGES them' : '').')</>');
 
         foreach ($inventory->files->files as $file) {
-            $role = match ($file->role) {
-                EnvFile::DOCUMENTATION => 'documentation, never loaded',
-                EnvFile::BASE => 'loaded by default',
-                default => 'loaded INSTEAD of .env when APP_ENV='.$file->environment,
-            };
+            $this->line('    '.str_pad($file->name, 18).' <fg=gray>php: '.$file->roleDescription()
+                .' · declares '.count($file->keys).'</>');
 
-            $this->line('    '.str_pad($file->name, 18).' <fg=gray>'.$role.' · declares '.count($file->keys).'</>');
+            if ($vite->present) {
+                $this->line('    '.str_repeat(' ', 18).' <fg=gray>vite: '.$file->viteRoleDescription().'</>');
+            }
+        }
+
+        if ($vite->present) {
+            $this->line('');
+            $globs = implode(', ', array_map(static fn (string $p): string => $p.'*', $vite->prefixes));
+
+            $this->line('    <fg=gray>Vite exposes '.$globs.' — '
+                .($vite->prefixSource === 'config'
+                    ? 'envPrefix in '.basename((string) $vite->configPath)
+                    : 'the default; no envPrefix declared'
+                ).'. Those follow the merge rules, not the swap.</>');
         }
 
         $this->line('');
@@ -170,7 +188,7 @@ class EnvCommand extends Command
 
         foreach ($gaps as $file => $names) {
             $this->line('  <fg=red>missing from '.$file.'</> <fg=gray>('.count($names).')</> <fg=gray>— '
-                .$file.' REPLACES .env, so these are absent at boot, not inherited</>');
+                .$file.' REPLACES .env for PHP, so these are absent at boot, not inherited</>');
 
             foreach ($names as $name) {
                 $this->line('    '.$name);
@@ -229,13 +247,14 @@ class EnvCommand extends Command
         $this->line('');
     }
 
-    /** A compact three-column marker: read / documented / set. */
+    /** A compact four-column marker: read / documented / set / vite-exposed. */
     private function flags(EnvVariable $variable): string
     {
         return '<fg=gray>['
             .($variable->isRead() ? 'r' : '-')
             .($variable->documented ? 'd' : '-')
             .($variable->set ? 's' : '-')
+            .($variable->exposedToVite ? 'v' : '-')
             .']</>';
     }
 
