@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "3815be70f565ca7d0575673dd3a26597",
+    "content-hash": "c5ed6461ebcfde01875b521e73d3e3b7",
     "packages": [
         {
             "name": "brick/math",
@@ -3164,7 +3164,7 @@
             "dist": {
                 "type": "path",
                 "url": "../laravel-doctor",
-                "reference": "fe2b36a9e4470ca0fa561968e8b6c82f626347ec"
+                "reference": "ce33e9af21254a737e9554270237ec65787abb0b"
             },
             "require": {
                 "illuminate/support": "^11.0|^12.0|^13.0",
@@ -3299,7 +3299,7 @@
             "dist": {
                 "type": "path",
                 "url": "../php-package-topology",
-                "reference": "46e3d6ac01148c946b5c7ca8ee159a5e57c8bf93"
+                "reference": "09bd20daee7f46a673dd512755e3541250b15fc0"
             },
             "require": {
                 "php": "^8.3",
@@ -3308,13 +3308,21 @@
             "require-dev": {
                 "laravel/pint": "^1.0",
                 "nikic/php-parser": "^5.0",
-                "pestphp/pest": "^4.0"
+                "pestphp/pest": "^4.0",
+                "wikimedia/composer-merge-plugin": "^2.1"
             },
             "suggest": {
                 "nikic/php-parser": "BSD-3 — the AST scanner behind graphine's SeamGuard, used by the source-import axis (sourceNeverReferences).",
                 "phpunit/phpunit": "The testing kit (AssertsPackageTopology / PackageTopologyConformance) needs a PHPUnit-providing host."
             },
             "type": "library",
+            "extra": {
+                "merge-plugin": {
+                    "include": [
+                        "composer.local.json"
+                    ]
+                }
+            },
             "autoload": {
                 "psr-4": {
                     "Rushing\\PackageTopology\\": "src/"
@@ -8771,7 +8779,7 @@
             "dist": {
                 "type": "path",
                 "url": "../laravel-mcp-registry",
-                "reference": "05f2db6d0919c1f535ad039ed5d6211859c7ac22"
+                "reference": "f74dfca247e961135b1587e87f4de592c90354ee"
             },
             "require": {
                 "illuminate/console": "^11.0|^12.0|^13.0",
@@ -10208,6 +10216,62 @@
                 "source": "https://github.com/webmozarts/assert/tree/2.4.1"
             },
             "time": "2026-06-15T15:31:57+00:00"
+        },
+        {
+            "name": "wikimedia/composer-merge-plugin",
+            "version": "v2.1.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/wikimedia/composer-merge-plugin.git",
+                "reference": "a03d426c8e9fb2c9c569d9deeb31a083292788bc"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/wikimedia/composer-merge-plugin/zipball/a03d426c8e9fb2c9c569d9deeb31a083292788bc",
+                "reference": "a03d426c8e9fb2c9c569d9deeb31a083292788bc",
+                "shasum": ""
+            },
+            "require": {
+                "composer-plugin-api": "^1.1||^2.0",
+                "php": ">=7.2.0"
+            },
+            "require-dev": {
+                "composer/composer": "^1.1||^2.0",
+                "ext-json": "*",
+                "mediawiki/mediawiki-phan-config": "0.11.1",
+                "php-parallel-lint/php-parallel-lint": "~1.3.1",
+                "phpspec/prophecy": "~1.15.0",
+                "phpunit/phpunit": "^8.5||^9.0",
+                "squizlabs/php_codesniffer": "~3.7.1"
+            },
+            "type": "composer-plugin",
+            "extra": {
+                "class": "Wikimedia\\Composer\\Merge\\V2\\MergePlugin",
+                "branch-alias": {
+                    "dev-master": "2.x-dev"
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Wikimedia\\Composer\\Merge\\V2\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Bryan Davis",
+                    "email": "bd808@wikimedia.org"
+                }
+            ],
+            "description": "Composer plugin to merge multiple composer.json files",
+            "support": {
+                "issues": "https://github.com/wikimedia/composer-merge-plugin/issues",
+                "source": "https://github.com/wikimedia/composer-merge-plugin/tree/v2.1.0"
+            },
+            "time": "2023-04-15T19:07:00+00:00"
         }
     ],
     "aliases": [],

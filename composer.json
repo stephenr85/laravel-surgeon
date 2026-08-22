@@ -1,7 +1,16 @@
 {
     "name": "rushing/laravel-surgeon",
     "description": "Deterministic code-insight + operation engine for Laravel package estates: an audit-first refactor tool built on nikic/php-parser (via graphine's SeamGuard AST scanner) that collapses an agent's hunt into a structured finding-set and applies mechanical operations (Tier-1 automated / Tier-2 guided / Tier-3 advisory), with the topology cycle-guard as post-rewrite verification. Doctor diagnoses; the surgeon operates.",
-    "keywords": ["laravel", "rushing", "refactor", "ast", "codemod", "audit", "topology", "surgeon"],
+    "keywords": [
+        "laravel",
+        "rushing",
+        "refactor",
+        "ast",
+        "codemod",
+        "audit",
+        "topology",
+        "surgeon"
+    ],
     "type": "library",
     "license": "MIT",
     "authors": [
@@ -25,7 +34,8 @@
         "laravel/pint": "^1.0",
         "orchestra/testbench": "^9.0|^10.0|^11.0",
         "pestphp/pest": "^2.0|^3.0",
-        "rushing/laravel-mcp-registry": "dev-main"
+        "rushing/laravel-mcp-registry": "dev-main",
+        "wikimedia/composer-merge-plugin": "^2.1"
     },
     "suggest": {
         "laravel/mcp": "Ships surgeon:* as reflected MCP tools via Rushing\\Surgeon\\Mcp\\SurgeonMcpServer (auto-registered when installed).",
@@ -47,29 +57,20 @@
             "url": "https://github.com/stephenr85/php-graphine.git"
         },
         {
-            "type": "path",
-            "url": "../php-package-topology",
-            "options": {
-                "symlink": true
-            }
-        },
-        {
-            "type": "path",
-            "url": "../laravel-doctor",
-            "options": {
-                "symlink": true
-            }
-        },
-        {
-            "type": "path",
-            "url": "../laravel-mcp-registry",
-            "options": {
-                "symlink": true
-            }
+            "type": "git",
+            "url": "https://github.com/stephenr85/php-popcorn.git"
         },
         {
             "type": "git",
-            "url": "https://github.com/stephenr85/php-popcorn.git"
+            "url": "https://github.com/stephenr85/laravel-doctor.git"
+        },
+        {
+            "type": "git",
+            "url": "https://github.com/stephenr85/laravel-mcp-registry.git"
+        },
+        {
+            "type": "git",
+            "url": "https://github.com/stephenr85/php-package-topology.git"
         }
     ],
     "extra": {
@@ -93,11 +94,17 @@
                 "splicewire/*",
                 "schemastud/*"
             ]
+        },
+        "merge-plugin": {
+            "include": [
+                "composer.local.json"
+            ]
         }
     },
     "config": {
         "allow-plugins": {
-            "pestphp/pest-plugin": true
+            "pestphp/pest-plugin": true,
+            "wikimedia/composer-merge-plugin": true
         },
         "sort-packages": true
     },
