@@ -7,6 +7,7 @@ use Laravel\Mcp\Facades\Mcp;
 use Rushing\McpRegistry\Bridge\ArtisanCommandReflector;
 use Rushing\Surgeon\Console\AuditCommand;
 use Rushing\Surgeon\Console\CanonicalizeCommand;
+use Rushing\Surgeon\Console\FingerprintCommand;
 use Rushing\Surgeon\Console\LintCommand;
 use Rushing\Surgeon\Console\MoveCommand;
 use Rushing\Surgeon\Console\OverlayCommand;
@@ -30,7 +31,9 @@ use Rushing\Surgeon\Operation\NullConformanceManifest;
  * the co-dev-overlay operation family {@see OverlayCommand} (ticket 10 — the first non-AST writer), the
  * overlay-inverse {@see CanonicalizeCommand} (ticket 11 — go shippable / git-resolve the lock), and the
  * cross-stack lint orchestration {@see LintCommand} (ticket 12 — Pint / eslint / … across the owned roots,
- * check by default, `--fix` as a separate reformat write-op; also a gate stage-4).
+ * check by default, `--fix` as a separate reformat write-op; also a gate stage-4), and the identity read
+ * {@see FingerprintCommand} (hash every file under a root + enumerate the config keys and env var names
+ * it reads, as digests two checkouts compare by).
  * Commands register only in console so a mere web/queue boot that has the provider installed pays nothing.
  *
  * The {@see ConformanceManifest} discovery port defaults to {@see NullConformanceManifest} (a foundation
@@ -68,6 +71,7 @@ class SurgeonServiceProvider extends BaseServiceProvider
                 CanonicalizeCommand::class,
                 LintCommand::class,
                 RewriteCommand::class,
+                FingerprintCommand::class,
             ]);
         }
 

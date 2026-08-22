@@ -25,7 +25,7 @@ use Rushing\Surgeon\SurgeonServiceProvider;
  * bridge deliberately does not own:
  *
  *   - Read / preview commands are exposed UNGATED and annotated IsReadOnly:
- *     surgeon:trace, surgeon:audit, surgeon:replay, surgeon:ping, plus the read modes of
+ *     surgeon:trace, surgeon:audit, surgeon:replay, surgeon:ping, surgeon:fingerprint, plus the read modes of
  *     surgeon:overlay (list/diff), surgeon:canonicalize (dry-run default) and surgeon:lint
  *     (check default). For the three read-defaulting-but-write-capable commands we SUPPRESS
  *     the write flags (--apply / --fix / --push / --composer) so the MCP surface can never

@@ -36,6 +36,22 @@ it('reflects every surgeon:* command into a tool with no per-command class', fun
         ->and($tools['surgeon_move'])->toBeInstanceOf(ArtisanCommandTool::class);
 });
 
+it('picks up a newly added read command with no MCP-side edit', function () {
+    // surgeon:fingerprint was added to the provider and to nothing else — it reaches the tool surface
+    // through the default policy branch, which is the whole claim the reflection bridge makes.
+    $fingerprint = surgeon_mcp_tools()['surgeon_fingerprint'];
+
+    expect($fingerprint)->toBeInstanceOf(ArtisanCommandTool::class)
+        ->and($fingerprint->toolAbility())->toBeNull()
+        ->and($fingerprint->annotations())->toMatchArray(['readOnlyHint' => true])
+        // The artisan signature IS the advertised schema — no Data class, no hand-authored tool.
+        // --json is absent because the bridge forces it and returns structured content.
+        ->and(JsonSchema::object($fingerprint->schema(...))->toArray()['properties'] ?? [])
+        ->toHaveKeys(['path', 'algo', 'expect'])
+        ->and(JsonSchema::object($fingerprint->schema(...))->toArray()['properties'] ?? [])
+        ->not->toHaveKey('json');
+});
+
 it('exposes read tools ungated and read-only', function () {
     $trace = surgeon_mcp_tools()['surgeon_trace'];
 
