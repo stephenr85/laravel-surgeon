@@ -3,7 +3,9 @@
 namespace Rushing\Surgeon\Operation;
 
 use Rushing\Doctor\DoctorAudit;
+use Rushing\Doctor\Finding;
 use Rushing\Surgeon\Conformance\BuiltInAudits;
+use Throwable;
 
 /**
  * The conformance-driven audit path (ticket 07, decision 5) — the engine behind `surgeon:audit`. It
@@ -28,9 +30,34 @@ use Rushing\Surgeon\Conformance\BuiltInAudits;
  *
  * The engine resolves audit class-strings through an injected resolver (the container `make`), so it stays
  * container-agnostic and unit-testable.
+ *
+ * **A throwing audit is a finding, never the end of the sweep (ticket 56).** An audit is a diagnostic
+ * that runs against whatever state a root happens to be in, so *an audit meeting an unmet precondition
+ * is a normal event* — a query against a column a lagging database has not got, a file the root never
+ * created. Before this, one such audit killed `surgeon:audit` outright and took every other audit's
+ * already-collected report down with it. The roots whose state is worst are the roots most likely to
+ * carry a throwing audit, and they are exactly the roots whose report is worth reading. So the sweep
+ * catches around both phases — {@see self::resolve()} and {@see self::collect()} — turns the throw into
+ * a finding naming the audit and the exception, and carries on.
+ *
+ * Two rulings shape that finding:
+ *  - **Never silently.** A suppressed exception with no finding is strictly worse than the crash, because
+ *    the report would then be green *because* an audit failed.
+ *  - **Warn advisory, Fail on a gate.** An audit that could not run has not found anything, so it must
+ *    not redden a gate on the strength of not knowing — but a GATE registration's contract is that its
+ *    subject was *verified*, and a gate that degrades to "no findings" is how a gate stops gating. So a
+ *    gate audit that cannot run reports Fail: unverified is not passed. The severity is the sweep's, not
+ *    the audit's, which is why it is decided here from {@see ConformanceAuditResult::$gate} rather than
+ *    by whatever threw.
  */
 class ConformanceSweep
 {
+    /** The check-string a throwing audit reports under; `.resolve` distinguishes the resolution phase. */
+    public const CHECK_ERRORED = 'audit-errored';
+
+    /** How much of an exception message survives into a finding detail — a QueryException carries whole SQL. */
+    private const MESSAGE_LIMIT = 300;
+
     /** @param callable(class-string): object $resolver resolves an audit class-string to an instance */
     public function __construct(
         private $resolver,
@@ -58,7 +85,7 @@ class ConformanceSweep
                 'rushing/laravel-surgeon',
                 $class,
                 false, // advisory, not a gate — a promotion/duplicate nomination never reddens the exit code
-                $this->collect($audit),
+                $this->collect($audit, $class, gate: false),
             );
         }
 
@@ -68,30 +95,88 @@ class ConformanceSweep
             }
             $seen[$registration->audit] = true;
 
-            $audit = ($this->resolver)($registration->audit);
+            try {
+                $audit = ($this->resolver)($registration->audit);
+            } catch (Throwable $e) {
+                // A registration naming a class that no longer exists (or whose constructor throws) fails
+                // before the audit runs at all — the same event one phase earlier, reported the same way.
+                $results[] = new ConformanceAuditResult(
+                    $registration->package,
+                    $registration->audit,
+                    $registration->gate,
+                    [$this->errored($registration->audit, $registration->gate, $e, resolving: true)],
+                );
+
+                continue;
+            }
 
             $results[] = new ConformanceAuditResult(
                 $registration->package,
                 $registration->audit,
                 $registration->gate,
-                $this->collect($audit),
+                $this->collect($audit, $registration->audit, $registration->gate),
             );
         }
 
         return new ConformanceReport($results);
     }
 
-    /** @return list<FixableFinding> */
-    private function collect(object $audit): array
+    /**
+     * @param  class-string  $class  the registered class-string, named in the finding if the audit throws
+     * @return list<FixableFinding>
+     */
+    private function collect(object $audit, string $class, bool $gate): array
     {
-        if ($audit instanceof SuggestsOperations) {
-            return $audit->suggestOperations();
-        }
+        try {
+            if ($audit instanceof SuggestsOperations) {
+                return $audit->suggestOperations();
+            }
 
-        if ($audit instanceof DoctorAudit) {
-            return array_map(fn ($finding) => new FixableFinding($finding, null), $audit->run());
+            if ($audit instanceof DoctorAudit) {
+                return array_map(fn ($finding) => new FixableFinding($finding, null), $audit->run());
+            }
+        } catch (Throwable $e) {
+            return [$this->errored($class, $gate, $e, resolving: false)];
         }
 
         return []; // an unknown shape registered in the manifest contributes nothing to the sweep
+    }
+
+    /**
+     * The finding an audit that could not report becomes. Carries the audit, the exception class, its
+     * first message line and origin — enough to route the repair to whoever owns the audit without the
+     * operator re-running anything.
+     */
+    private function errored(string $class, bool $gate, Throwable $e, bool $resolving): FixableFinding
+    {
+        $check = self::CHECK_ERRORED.($resolving ? '.resolve' : '');
+
+        $detail = $class.($resolving ? ' could not be resolved' : ' threw while running')
+            .' — '.$e::class.': '.$this->firstLine($e->getMessage())
+            .' ('.basename($e->getFile()).':'.$e->getLine().'). '
+            .($gate
+                ? 'A GATE audit that could not run has not verified its subject, so the sweep reports Fail: unverified is not passed.'
+                : 'The rest of the sweep completed; this audit contributed no findings, which is not the same as finding nothing.');
+
+        return new FixableFinding(
+            $gate ? Finding::fail($check, $detail) : Finding::warn($check, $detail),
+            null,
+        );
+    }
+
+    /** One line, bounded — a QueryException's message carries whole SQL and would swamp the report. */
+    private function firstLine(string $message): string
+    {
+        $message = trim($message);
+
+        if ($message === '') {
+            return '(no message)'; // an Error thrown bare still has to name something readable
+        }
+
+        $line = trim((string) strtok($message, "\r\n"));
+
+        return strlen($line) > self::MESSAGE_LIMIT
+            ? substr($line, 0, self::MESSAGE_LIMIT).'…'
+            : $line;
     }
 }
