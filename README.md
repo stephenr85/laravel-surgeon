@@ -30,48 +30,58 @@ Past scaffold — the full command surface is live:
 - `surgeon:trace` — target-driven, read-only reference hunt / relocation pre-pass.
 - `surgeon:move` / `surgeon:rewrite` — the writer commands; `--apply` refuses raw declared input, applying only an explicit *resolved* operation set.
 - `surgeon:lint`, `surgeon:overlay`, `surgeon:canonicalize`, `surgeon:replay` — the rest of the operation/verification family.
-- `surgeon:fingerprint` — the identity read: hash every file under a root and enumerate every config key
-  and env var name it reads, as digests two checkouts compare by.
+- `surgeon:env` — the environment inventory: every env var the codebase reads or declares, reconciled
+  against `.env.example` and `.env`, plus the config keys it reads.
 
-### `surgeon:fingerprint`
+### `surgeon:env`
+
+Nothing in Laravel answers "what does this thing actually need in its environment". `config:show`
+prints one config file's *values* (and would spray secrets doing it), `env` prints `APP_ENV`, and
+`vlucas/phpdotenv` parses `.env` without ever enumerating what reads it — Symfony's `debug:dotenv` has
+no Laravel counterpart. So the question gets answered by grepping, which is why `.env.example` drifts
+from the code the moment anyone stops being careful.
 
 ```bash
-php artisan surgeon:fingerprint --path=~/Workspaces/php/packages/rushing/laravel-surgeon
+php artisan surgeon:env --path=~/Workspaces/php/packages/splicewire/tower
 ```
 
 ```
-surgeon:fingerprint (…/rushing/laravel-surgeon)
+surgeon:env (…/splicewire/tower)
 
-  digest   d0e1f9420835196030653f9e1fe72568 (xxh128)
-  files    903c94dc7c7b570b2f588259dba962b8  166 file(s)
-  symbols  e2b90edd1208d797d983dc8ab4107c6c  1 config key(s), 0 env var(s)
+  16 env var(s) read  ·  16 known  ·  117 config key(s) read
+
+  read outside config/ (3) — these return NULL once config:cache runs — i.e. in production
+    APP_PROD_URL          src/Data/JsonSchemaData.php:30, src/Data/JsonSchemaRefData.php:16
+    MCP_LOCAL_TENANT      src/Mcp/Servers/SplicewireServer.php:92
+    MCP_LOCAL_USER_EMAIL  src/Mcp/Servers/SplicewireServer.php:107
 ```
 
-Three digests, because they answer different questions: **files** moves when any tracked byte changes;
-**symbols** moves when the set of config keys / env var names the tree reads changes — the signal that
-catches "something started reading a variable nobody has set in production", which a content hash can
-only report as *something* changed. The combined **digest** is the one to paste into a ticket.
+The three-way join is what makes it worth running — reads vs `.env.example` vs `.env`:
 
-Paths are relative to the root and everything is sorted, so the same content at two different absolute
-paths produces the same digest. `vendor/`, `node_modules/`, `.git/`, `storage/`, `build/`, `dist/` are
-pruned before descent (add more with `--prune=`), so the digest answers "has this repo changed", not
-"have I run `composer install`".
+- **read outside `config/`** — the live bug. `config:cache` stops `.env` from loading, so these return
+  null in production and nowhere else. `tests/` is excluded; a suite runs against a live `.env`, so the
+  hazard genuinely does not apply there.
+- **read but not in `.env.example`** — a deployer has no way to know the variable exists.
+- **declared but never read** — dead weight in `.env.example` nobody can prove is safe to delete.
 
 | | |
 | --- | --- |
-| `--path=` | Root to fingerprint (default: the app base path) |
-| `--expect=` | Exit non-zero unless the combined digest matches — a CI drift gate with no sidecar state |
-| `--files` / `--symbols` | List the per-file hashes, or the config keys and env names |
-| `--files-only` | Skip the `config()`/`env()` scan (the expensive half; also the PHP-only half) |
-| `--algo=` | Any `hash_algos()` name; the `xxh128` default is fast and non-cryptographic |
-| `--json` | Machine-readable output — always includes the file list and the symbol surface |
+| `--path=` | Root to scan (default: the app base path) |
+| `--example=` / `--env-file=` | Point at other dotenv files (default: `<path>/.env.example`, `<path>/.env`) |
+| `--all` | List every variable with `[rds]` read/documented/set markers, not just findings |
+| `--config` | Also list the config keys read |
+| `--sites` | Show `file:line` for every variable |
+| `--strict` | Exit non-zero if anything is undocumented, unused, or cache-unsafe |
+| `--json` | Machine-readable output |
 
-**Env values are never read.** The scan collects variable *names* from `env()` call sites and never
-resolves them, so nothing secret-derived can reach stdout, a CI log, or an MCP response.
+**Accuracy is a floor, not a census.** Only literal first arguments are read, so `env($name)` and
+`config("beam.{$domain}.path")` are invisible — everything listed is really read, but a tree that
+builds key names dynamically reads more than this can show. Guessing at an interpolated key would
+produce the false entries that get a report ignored. The scan is token-level, so a `config()` call
+inside a docblock is prose, not a read.
 
-Backing this: `RegistrationDriftDetector`, `AuditEngine`, and `PackageGraph` in `src/Audit/`, plus an
-MCP server (`src/Mcp/SurgeonMcpServer.php`) exposing the same operations to an agent. See the effort
-map in the consuming app at `.scratch/refactor-tooling/MAP.md`.
+**Values are never read** — names come from call sites and from the left of the `=` in a dotenv file,
+so nothing secret-derived can reach stdout, a CI log, or an MCP response.
 
 ## Local dev
 

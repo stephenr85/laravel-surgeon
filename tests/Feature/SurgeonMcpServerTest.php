@@ -37,18 +37,18 @@ it('reflects every surgeon:* command into a tool with no per-command class', fun
 });
 
 it('picks up a newly added read command with no MCP-side edit', function () {
-    // surgeon:fingerprint was added to the provider and to nothing else — it reaches the tool surface
+    // surgeon:env was added to the provider and to nothing else — it reaches the tool surface
     // through the default policy branch, which is the whole claim the reflection bridge makes.
-    $fingerprint = surgeon_mcp_tools()['surgeon_fingerprint'];
+    $env = surgeon_mcp_tools()['surgeon_env'];
 
-    expect($fingerprint)->toBeInstanceOf(ArtisanCommandTool::class)
-        ->and($fingerprint->toolAbility())->toBeNull()
-        ->and($fingerprint->annotations())->toMatchArray(['readOnlyHint' => true])
+    expect($env)->toBeInstanceOf(ArtisanCommandTool::class)
+        ->and($env->toolAbility())->toBeNull()
+        ->and($env->annotations())->toMatchArray(['readOnlyHint' => true])
         // The artisan signature IS the advertised schema — no Data class, no hand-authored tool.
         // --json is absent because the bridge forces it and returns structured content.
-        ->and(JsonSchema::object($fingerprint->schema(...))->toArray()['properties'] ?? [])
-        ->toHaveKeys(['path', 'algo', 'expect'])
-        ->and(JsonSchema::object($fingerprint->schema(...))->toArray()['properties'] ?? [])
+        ->and(JsonSchema::object($env->schema(...))->toArray()['properties'] ?? [])
+        ->toHaveKeys(['path', 'example', 'strict'])
+        ->and(JsonSchema::object($env->schema(...))->toArray()['properties'] ?? [])
         ->not->toHaveKey('json');
 });
 
