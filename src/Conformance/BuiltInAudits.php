@@ -56,7 +56,10 @@ class BuiltInAudits
      * audit (a composer `type: path` repository whose checkout is gone, which aborts every composer
      * command in the repo at parse time — scanning this repo AND the repos its path repos declare)
      * and the require-without-supply audit (a require whose only declared source is a path repo, so it
-     * resolves here and nowhere else). All emit {@see FixableFinding}s through the ticket-07/13 bridge.
+     * resolves here and nowhere else), then the third supply check — the unsatisfied-neighbour-require
+     * audit (a path-INSTALLED package requiring something this root's installed set does not carry, which
+     * neither manifest-reading sibling can see because the require belongs to a neighbour). All emit
+     * {@see FixableFinding}s through the ticket-07/13 bridge.
      *
      * @return list<SuggestsOperations>
      */
@@ -71,6 +74,7 @@ class BuiltInAudits
             new ConfigClassStringAudit($this->appRoot),
             new DanglingPathRepoAudit($this->appRoot),
             new RequireWithoutSupplyAudit($this->appRoot),
+            new UnsatisfiedNeighbourRequireAudit($this->appRoot),
         ];
     }
 }

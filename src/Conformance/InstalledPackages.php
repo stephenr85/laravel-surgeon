@@ -11,12 +11,21 @@ use Rushing\Surgeon\Rewrite\DestinationDepAdvisor;
  * and can't reach up to a `Splicewire\*` package, but when it RUNS inside a host it may legally read what
  * that host has installed — the beam-ux twin is DATA discovered at runtime, not a compile dependency.
  *
- * It answers the two questions the audits ask of the installed estate:
+ * It answers the questions the audits ask of the installed estate:
  *  - **b1:** which downstream package OWNS a given FQN? (its longest matching PSR-4 prefix) — so an
  *    app DTO whose every import lands in one package can be nominated for promotion into it.
  *  - **b2:** does a package ship a class with a given namespace TAIL, and where does that file live? —
  *    so a twin of `App\Data\X` shipped as `Splicewire\Beam\Ux\Data\X` is found by matching the
  *    `Data\X` tail against each package's PSR-4 root + expected relative path.
+ *  - **which packages are installed from a local `path` source, and what does this root's installed set
+ *    already contain?** — {@see self::installedFromPath()} and {@see self::satisfies()}, the substrate
+ *    {@see UnsatisfiedNeighbourRequireAudit} resolves against (ticket 69).
+ *
+ * **Every installed package is kept, PSR-4 or not.** An earlier revision dropped packages declaring no
+ * `psr-4` autoload, which was harmless while the only questions were namespace-shaped and is a defect the
+ * moment the question is "is this package present?": a `files`-autoload package (every `symfony/polyfill-*`)
+ * would read as absent and manufacture a supply finding against a root that has it installed. `ownerOf()`
+ * and `findTwin()` are unaffected — a package with no roots contributes no prefixes to either.
  *
  * It reads the SAME authoritative source {@see DestinationDepAdvisor} reads
  * (installed.json → each package's real PSR-4 roots), so vendor≠namespace-root packages (GuzzleHttp,
@@ -25,8 +34,9 @@ use Rushing\Surgeon\Rewrite\DestinationDepAdvisor;
 class InstalledPackages
 {
     /**
-     * @param  list<array{name: string, roots: array<string, string>, path: string}>  $packages
-     *                                                                                           each: composer name, a psr-4 map (prefix-with-trailing-`\` => absolute src dir), and install path
+     * @param  list<array{name: string, roots: array<string, string>, path: string, source: ?string, provides: list<string>}>  $packages
+     *                                                                                                                                    each: composer name, a psr-4 map (prefix-with-trailing-`\` => absolute src dir), install path, install
+     *                                                                                                                                    source type (`path` for a local checkout), and everything it `replace`s or `provide`s
      */
     protected function __construct(
         public array $packages,
@@ -78,9 +88,23 @@ class InstalledPackages
                     }
                 }
             }
-            if ($roots !== []) {
-                $packages[] = ['name' => $name, 'roots' => $roots, 'path' => $installPath];
+            $provides = [];
+            foreach (['replace', 'provide'] as $block) {
+                $names = $package[$block] ?? [];
+                if (is_array($names)) {
+                    foreach (array_keys($names) as $provided) {
+                        $provides[] = strtolower((string) $provided);
+                    }
+                }
             }
+
+            $packages[] = [
+                'name' => $name,
+                'roots' => $roots,
+                'path' => $installPath,
+                'source' => self::sourceType($package),
+                'provides' => array_values(array_unique($provides)),
+            ];
         }
 
         return new self($packages);
@@ -157,6 +181,54 @@ class InstalledPackages
         }
 
         return $matches;
+    }
+
+    /**
+     * Every package composer installed from a local `path` source — a symlink or copy of a checkout on
+     * this machine, i.e. live source the host is running against rather than a resolved artifact.
+     *
+     * @return list<array{name: string, roots: array<string, string>, path: string, source: ?string, provides: list<string>}>
+     */
+    public function installedFromPath(): array
+    {
+        return array_values(array_filter($this->packages, fn (array $package) => $package['source'] === 'path'));
+    }
+
+    /**
+     * Does this root's installed set contain the named package — directly, or through something that
+     * `replace`s or `provide`s it? Composer's own resolution rule, and the only one an offline read of
+     * `installed.json` admits. Case-insensitive: composer names are.
+     */
+    public function satisfies(string $name): bool
+    {
+        $name = strtolower($name);
+
+        foreach ($this->packages as $package) {
+            if (strtolower($package['name']) === $name || in_array($name, $package['provides'], true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * How composer got this package. A local checkout is recorded as `path` on the dist half, the source
+     * half, or both depending on whether it was symlinked or mirrored — so `path` wins whenever either
+     * says so, and anything else reports whichever type is recorded.
+     *
+     * @param  array<string, mixed>  $package
+     */
+    private static function sourceType(array $package): ?string
+    {
+        $dist = is_array($package['dist'] ?? null) ? ($package['dist']['type'] ?? null) : null;
+        $source = is_array($package['source'] ?? null) ? ($package['source']['type'] ?? null) : null;
+
+        if ($dist === 'path' || $source === 'path') {
+            return 'path';
+        }
+
+        return is_string($dist) ? $dist : (is_string($source) ? $source : null);
     }
 
     private static function tailOf(string $fqn, int $segments): string
