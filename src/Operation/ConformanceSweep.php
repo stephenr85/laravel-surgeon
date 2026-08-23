@@ -2,8 +2,8 @@
 
 namespace Rushing\Surgeon\Operation;
 
+use Rushing\Doctor\AuditError;
 use Rushing\Doctor\DoctorAudit;
-use Rushing\Doctor\Finding;
 use Rushing\Surgeon\Conformance\BuiltInAudits;
 use Throwable;
 
@@ -49,14 +49,17 @@ use Throwable;
  *    gate audit that cannot run reports Fail: unverified is not passed. The severity is the sweep's, not
  *    the audit's, which is why it is decided here from {@see ConformanceAuditResult::$gate} rather than
  *    by whatever threw.
+ *
+ * Both rulings, and the finding that renders them, now live in {@see AuditError} — doctor's runner grew the
+ * identical hole and the identical fix (ticket 72), so the shape an operator reads is stated once for both.
  */
 class ConformanceSweep
 {
-    /** The check-string a throwing audit reports under; `.resolve` distinguishes the resolution phase. */
-    public const CHECK_ERRORED = 'audit-errored';
-
-    /** How much of an exception message survives into a finding detail — a QueryException carries whole SQL. */
-    private const MESSAGE_LIMIT = 300;
+    /**
+     * The check-string a throwing audit reports under; `.resolve` distinguishes the resolution phase.
+     * Aliased from {@see AuditError} rather than restated — see the note on the sweep's error handling.
+     */
+    public const CHECK_ERRORED = AuditError::CHECK;
 
     /** @param callable(class-string): object $resolver resolves an audit class-string to an instance */
     public function __construct(
@@ -143,40 +146,20 @@ class ConformanceSweep
     }
 
     /**
-     * The finding an audit that could not report becomes. Carries the audit, the exception class, its
-     * first message line and origin — enough to route the repair to whoever owns the audit without the
-     * operator re-running anything.
+     * The finding an audit that could not report becomes — built by {@see AuditError} in
+     * `rushing/laravel-doctor`, the foundation both this sweep and {@see \Rushing\Doctor\DoctorRunner}
+     * already depend on (ticket 72). The CATCH stays here, because the two runners' loops differ; the
+     * FINDING is shared, because `audit-errored` is an operator-facing vocabulary that must mean the same
+     * thing whichever tool printed it, and its closing sentence is the gate ruling rendered at the point of
+     * reading. Two copies of a ruling drift, and the drifted one still reads as authoritative.
      */
     private function errored(string $class, bool $gate, Throwable $e, bool $resolving): FixableFinding
     {
-        $check = self::CHECK_ERRORED.($resolving ? '.resolve' : '');
-
-        $detail = $class.($resolving ? ' could not be resolved' : ' threw while running')
-            .' — '.$e::class.': '.$this->firstLine($e->getMessage())
-            .' ('.basename($e->getFile()).':'.$e->getLine().'). '
-            .($gate
-                ? 'A GATE audit that could not run has not verified its subject, so the sweep reports Fail: unverified is not passed.'
-                : 'The rest of the sweep completed; this audit contributed no findings, which is not the same as finding nothing.');
-
         return new FixableFinding(
-            $gate ? Finding::fail($check, $detail) : Finding::warn($check, $detail),
+            $resolving
+                ? AuditError::resolving($class, $gate, $e)
+                : AuditError::running($class, $gate, $e),
             null,
         );
-    }
-
-    /** One line, bounded — a QueryException's message carries whole SQL and would swamp the report. */
-    private function firstLine(string $message): string
-    {
-        $message = trim($message);
-
-        if ($message === '') {
-            return '(no message)'; // an Error thrown bare still has to name something readable
-        }
-
-        $line = trim((string) strtok($message, "\r\n"));
-
-        return strlen($line) > self::MESSAGE_LIMIT
-            ? substr($line, 0, self::MESSAGE_LIMIT).'…'
-            : $line;
     }
 }
