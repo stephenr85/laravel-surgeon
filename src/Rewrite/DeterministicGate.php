@@ -19,7 +19,13 @@ use Rushing\Surgeon\Lint\LintOrchestrator;
  *  3. **topology cycle-guard** — `laravel-package-topology`'s declared-topology assertion, catching an
  *     upward composer edge a relocation introduced. Guarded: skipped where the guard isn't installed
  *     in the touched roots (it runs as a real gate in an app/package that composes it).
- *  4. **cross-stack lint** (ticket 12) — the {@see LintOrchestrator} run in **check-mode** over the
+ *  4. **dangling siblings** ({@see SiblingSymbolCheck}) — every class-like name on a touched file that
+ *     resolves into that file's OWN namespace must exist. Catches the one failure `php -l` structurally
+ *     cannot see: relocating members of one namespace ONE AT A TIME re-binds the unqualified sibling
+ *     references left behind, and an unresolvable class name is a runtime failure, not a parse error.
+ *     Runs after the autoload stage so its fallback existence test sees a fresh autoloader. Always on —
+ *     it fails only on breakage the write-op itself introduced.
+ *  5. **cross-stack lint** (ticket 12) — the {@see LintOrchestrator} run in **check-mode** over the
  *     touched roots (Pint / eslint / …, sniff-with-override), catching style drift the write introduced.
  *     Check-mode ONLY: the gate never silently reformats inside a `move`/`canonicalize` (that would blur
  *     what the write-op changed vs what the formatter changed — poison for the touch-manifest review).
@@ -37,6 +43,7 @@ class DeterministicGate
         public bool $runTopology = true,
         public bool $runLint = false,
         private ?LintOrchestrator $lint = null,
+        private ?SiblingSymbolCheck $siblings = null,
     ) {}
 
     /**
@@ -58,6 +65,8 @@ class DeterministicGate
             $this->topology($roots, $result);
         }
 
+        $this->siblings($touchedFiles, $result);
+
         if ($this->runLint) {
             $this->lint($roots, $result);
         }
@@ -66,7 +75,38 @@ class DeterministicGate
     }
 
     /**
-     * Stage 4 — cross-stack lint in check-mode over the touched roots (ticket 12). Fails the gate on any
+     * Stage 4 — the dangling-sibling check. See {@see SiblingSymbolCheck} for the defect it exists for;
+     * the short version is that `php -l` passes on a file whose type-hint names a class that no longer
+     * exists, so a staged namespace move can reach a commit behind a fully green gate.
+     *
+     * @param  list<string>  $files
+     */
+    private function siblings(array $files, GateResult $result): void
+    {
+        $dangling = ($this->siblings ?? new SiblingSymbolCheck)->dangling($files);
+
+        if ($dangling === []) {
+            $result->record('dangling siblings', 'pass', 'no unresolvable same-namespace reference');
+
+            return;
+        }
+
+        $lines = array_map(
+            fn (array $d) => basename($d['file']).':'.$d['line'].' → '.$d['name'],
+            $dangling,
+        );
+
+        $result->record(
+            'dangling siblings',
+            'fail',
+            implode(' | ', $lines)
+            .' — a same-namespace reference no longer resolves. Relocate a namespace as ONE atomic '
+            .'cluster (repeat --symbol, one --to), or rename inside the old namespace first.',
+        );
+    }
+
+    /**
+     * Stage 5 — cross-stack lint in check-mode over the touched roots (ticket 12). Fails the gate on any
      * violation; skips honestly when no stack applies (or a binary is absent). Never reformats — the gate
      * is check-only so the touch-manifest stays honest about what the write-op (not a formatter) changed.
      *
