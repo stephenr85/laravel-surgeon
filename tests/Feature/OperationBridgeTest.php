@@ -181,6 +181,64 @@ it('surfaces a throwing built-in audit without losing the host manifest behind i
         ->and($report->results[1]->fixables)->toHaveCount(2);
 });
 
+it('runs a built-in advisory by default — nothing it finds reddens the exit code (ticket 88)', function () {
+    // The channel's contract: an always-on audit fires in every repo whether or not that repo asked
+    // for it, so it never gates on its own. PlainAudit emits a Warn, which is a finding an operator
+    // reads and not a state that stops a build.
+    $report = sweep()->run(manifestOf([]), [new PlainAudit]);
+
+    expect($report->results[0]->gate)->toBeFalse()
+        ->and($report->hasGateFailure(DoctorStatus::Warn))->toBeFalse();
+});
+
+it('lets a HOST opt a built-in into gating by registering its class-string (ticket 88)', function () {
+    // The escape hatch. Same audit, same findings — the host's manifest is what promotes them into
+    // the exit code, and the promotion honours --floor like any other gate result.
+    $report = sweep()->run(
+        manifestOf([new DoctorRegistration('host', PlainAudit::class, gate: true)]),
+        [new PlainAudit],
+    );
+
+    expect($report->results[0]->gate)->toBeTrue()
+        ->and($report->hasGateFailure(DoctorStatus::Warn))->toBeTrue()
+        ->and($report->hasGateFailure())->toBeFalse(); // still a Warn — the default Fail floor holds
+});
+
+it('carries the opt-in FLAG only — the built-in instance runs, the registration is never resolved', function () {
+    // Why this matters: every built-in takes a required `string $appRoot`, so resolving the
+    // registration through the container throws an unresolvable-primitive error, which the sweep
+    // would faithfully report as a Fail on a gate registration. The host would have opted into a red
+    // exit code that reports nothing. So the resolver must not be reached at all on a dedupe hit.
+    $resolved = [];
+    $sweep = new ConformanceSweep(function (string $class) use (&$resolved) {
+        $resolved[] = $class;
+
+        return new $class;
+    });
+
+    $report = $sweep->run(
+        manifestOf([new DoctorRegistration('host', PlainAudit::class, gate: true)]),
+        [new PlainAudit],
+    );
+
+    expect($resolved)->toBe([])                      // never made
+        ->and($report->auditCount())->toBe(1)        // one result, not two — the dedupe still holds
+        ->and($report->results[0]->package)->toBe('rushing/laravel-surgeon')
+        ->and($report->all())->toHaveCount(2);       // the built-in's own findings, not a re-run
+});
+
+it('leaves a built-in advisory when the host registers it WITHOUT a gate (ticket 88)', function () {
+    // A registration is consent to gate, not merely acquaintance — `gate: false` changes nothing, which
+    // is what keeps the dedupe's existing "registered by many packages" behaviour intact.
+    $report = sweep()->run(
+        manifestOf([new DoctorRegistration('host', PlainAudit::class, gate: false)]),
+        [new PlainAudit],
+    );
+
+    expect($report->results[0]->gate)->toBeFalse()
+        ->and($report->hasGateFailure(DoctorStatus::Warn))->toBeFalse();
+});
+
 it('exposes relocation as the first concrete Operation', function () {
     $op = new RelocationOperation(['/tmp/root']);
 

@@ -59,11 +59,18 @@ use Rushing\Surgeon\Overlay\OverlayVerb;
  * flag plus some external roster file — was refused: it is scaffolding for a list every root carries,
  * and it would teach this package a vocabulary that is not composer's.
  *
- * **A neighbour's defect reports; it never gates.** Findings about the running root keep the severity
- * split above. A finding about a *neighbour* is a **Warn** whatever file it sits in, names the root that
- * owns the file, and nominates nothing deterministic — the repair belongs to someone else's tree, an
- * `overlay-remove` here would splice the wrong repo's config, and in an estate where several sessions
- * work at once someone else's half-finished edit must never redden this root's exit code.
+ * **A neighbour's defect is Warn; the running root's keeps the Fail/Warn split above.** A finding about a
+ * *neighbour* is a **Warn** whatever file it sits in, names the root that owns the file, and nominates
+ * nothing deterministic — the repair belongs to someone else's tree, an `overlay-remove` here would splice
+ * the wrong repo's config, and in an estate where several sessions work at once someone else's
+ * half-finished edit must never redden this root's exit code.
+ *
+ * That last clause is about severity, and it used to be spelled *"a neighbour's defect reports; it never
+ * gates"* — which implied the running root's Fail did gate. It does not: this ships on the built-in
+ * channel, advisory by contract (ticket 88), so nothing here reddens an exit code until a host registers
+ * this class in its own doctor manifest with `gate: true`. The severity split is what makes that opt-in
+ * worth having — it is the reason a host can gate on its own broken path repo without gating on a
+ * neighbour's.
  *
  * **What this audit does not check, stated in its own report.** It is a pure manifest-and-filesystem
  * question: remotes are not verified and installed state is not read, so a clean result means "composer

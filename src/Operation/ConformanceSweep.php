@@ -28,6 +28,20 @@ use Throwable;
  * parallel channel, always present, scoped to the running host's app root. Built-ins are reported first
  * (their class-string joins the dedupe set, so a host that also registered one wouldn't double-run it).
  *
+ * **The built-in channel is advisory BY CONTRACT, and a host opts in per audit (ticket 88).** An always-on
+ * audit fires in every repo whether or not that repo asked for it; a manifest registration is a repo saying
+ * it wants this check. Those are different contracts, and `gate` is the word for the difference — so no
+ * built-in declares a gate posture of its own, at any severity. Severity stays the audit's (it is what an
+ * operator reads); gating stays the host's (it is what stops a build). The alternative — a per-audit
+ * `GATES` constant — would let a foundation package decide, for every root in an estate, what fails that
+ * root's build, over roots that never installed it deliberately.
+ *
+ * The escape hatch is the manifest: a host registering a built-in's class-string with `gate: true` promotes
+ * that built-in's findings into the exit code, honouring `--floor` like any other gate result. It carries
+ * the FLAG only, never a replacement instance — see {@see self::gateOptIns()} for why resolving the
+ * registration through the container is the wrong half of the pair. Before ticket 88 such a registration
+ * was reached by nothing and silently dropped: not a double-run, not an override, no finding.
+ *
  * The engine resolves audit class-strings through an injected resolver (the container `make`), so it stays
  * container-agnostic and unit-testable.
  *
@@ -74,6 +88,7 @@ class ConformanceSweep
     {
         $seen = [];
         $results = [];
+        $optedIn = $this->gateOptIns($manifest);
 
         // Surgeon's OWN audits first (ticket 15) — a parallel, always-present channel scoped to the host.
         // Their class-string joins the dedupe set so a host that also registered one won't double-run it.
@@ -84,11 +99,15 @@ class ConformanceSweep
             }
             $seen[$class] = true;
 
+            // Advisory by contract (ticket 88), not by omission — see the class docblock. A host that
+            // registered this same class in its own manifest as a gate opts INTO the exit code here.
+            $gate = $optedIn[$class] ?? false;
+
             $results[] = new ConformanceAuditResult(
                 'rushing/laravel-surgeon',
                 $class,
-                false, // advisory, not a gate — a promotion/duplicate nomination never reddens the exit code
-                $this->collect($audit, $class, gate: false),
+                $gate,
+                $this->collect($audit, $class, $gate),
             );
         }
 
@@ -122,6 +141,34 @@ class ConformanceSweep
         }
 
         return new ConformanceReport($results);
+    }
+
+    /**
+     * The host's gate opt-ins for built-in audits (ticket 88): every manifest registration naming a
+     * built-in's class-string, mapped to the `gate` it asked for. Read BEFORE the built-in loop, because
+     * the built-in runs first and claims the dedupe set — so the registration is never reached, and
+     * before this it was silently dropped rather than honoured.
+     *
+     * It carries the flag ONLY. The registration's class-string is not resolved through the container,
+     * and that is deliberate: a built-in takes an explicit `$appRoot` with no default ({@see BuiltInAudits}
+     * constructs them from the host's base path), so `make()`ing one throws an unresolvable-primitive
+     * error — which {@see self::errored()} would faithfully report as a Fail on a gate registration. The
+     * host would have opted into a red exit code that reports nothing. Keeping the already-constructed
+     * built-in instance and adopting only its posture is what the host is actually asking for.
+     *
+     * @return array<class-string, bool>
+     */
+    private function gateOptIns(ConformanceManifest $manifest): array
+    {
+        $optIns = [];
+
+        foreach ($manifest->registrations() as $registration) {
+            if ($registration->gate) {
+                $optIns[$registration->audit] = true;
+            }
+        }
+
+        return $optIns;
     }
 
     /**

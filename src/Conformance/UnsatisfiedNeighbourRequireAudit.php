@@ -31,10 +31,17 @@ use Rushing\Surgeon\Operation\SuggestsOperations;
  * belongs to a neighbour and the repo declaring it is fine. The substrate has to be composer's record of
  * what is actually installed.
  *
- * **Severity is Fail, and it is the only member of this family that gates.** The rest are advisory because
+ * **Severity is Fail, and it is the only member of this family that earns Fail.** The rest are Warn because
  * the repair is a judgment call about *which* supply mechanism to adopt. Here there is exactly one repair,
  * it is a single command at this root, and the untreated state is a fatal `Class not found` the first time
  * a class needing the missing package loads.
+ *
+ * **Severity is not gating, and this audit does not gate on its own (ticket 88).** It ships on the built-in
+ * channel, which is advisory by contract — see {@see \Rushing\Surgeon\Operation\ConformanceSweep}. A host
+ * that wants a Fail here to redden its build registers this class in its own doctor manifest with
+ * `gate: true`. An earlier draft of this line read *"the only member of this family that gates"*, which was
+ * never true of any built-in and is worth naming rather than quietly deleting: severity and gating are
+ * separate concepts in this codebase on purpose, and prose that conflates them reads as authoritative.
  *
  * **Latency is not mitigation, and severity cannot be derived from whether the root boots.** Every one of
  * the 21 instances this audit was built against sat in a root that booted: an unsatisfied require costs
