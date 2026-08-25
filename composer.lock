@@ -3164,7 +3164,7 @@
             "dist": {
                 "type": "path",
                 "url": "../laravel-doctor",
-                "reference": "ce33e9af21254a737e9554270237ec65787abb0b"
+                "reference": "1657621a710a9dd5294be062df54043fcf0ae72d"
             },
             "require": {
                 "illuminate/support": "^11.0|^12.0|^13.0",
@@ -3299,7 +3299,7 @@
             "dist": {
                 "type": "path",
                 "url": "../php-package-topology",
-                "reference": "09bd20daee7f46a673dd512755e3541250b15fc0"
+                "reference": "7682d26add142a2f28aba8d7969860b25549e229"
             },
             "require": {
                 "php": "^8.3",
@@ -3369,10 +3369,10 @@
         {
             "name": "rushing/php-popcorn",
             "version": "dev-main",
-            "source": {
-                "type": "git",
-                "url": "https://github.com/stephenr85/php-popcorn.git",
-                "reference": "6900c7e4e2b0276a0328ef671883fcc3e2ca19dd"
+            "dist": {
+                "type": "path",
+                "url": "../php-popcorn",
+                "reference": "6dc498ec600790c7de8d38f480d2ad1d25b8c117"
             },
             "require": {
                 "php": "^8.3",
@@ -3380,9 +3380,9 @@
             },
             "require-dev": {
                 "laravel/pint": "^1.0",
-                "pestphp/pest": "^3.0"
+                "pestphp/pest": "^3.0",
+                "phpstan/phpstan": "^2.2"
             },
-            "default-branch": true,
             "type": "library",
             "extra": {
                 "package-topology": {
@@ -3407,6 +3407,9 @@
                 ],
                 "test": [
                     "@php vendor/bin/pest"
+                ],
+                "analyse": [
+                    "@php vendor/bin/phpstan analyse"
                 ]
             },
             "license": [
@@ -3426,7 +3429,10 @@
                 "registry",
                 "strategy"
             ],
-            "time": "2026-08-10T02:27:43+00:00"
+            "transport-options": {
+                "symlink": true,
+                "relative": true
+            }
         },
         {
             "name": "symfony/clock",
