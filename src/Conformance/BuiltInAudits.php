@@ -68,7 +68,11 @@ class BuiltInAudits
      * TRANSITIVELY with no `repositories` entry at this root, which is what composer actually resolves
      * against. It nominates and never certifies, and it stamps the mode (overlay-present/absent) it
      * answered in on every finding, because the same root gives different answers in the two modes and a
-     * bare zero is unreadable. Finally b3 — the published-migration-drift audit ({@see PublishedMigrationDriftAudit}, beam-facade ticket
+     * bare zero is unreadable. Then the dangling-install-path audit
+     * ({@see DanglingInstallPathAudit}, beam-facade tickets 74/92): a `vendor/` entry that resolves
+     * nowhere — Fail when composer's own installed record names it, Warn when it is an orphaned symlink
+     * composer has never heard of. It sits after the supply checks because it is the only one that walks
+     * the filesystem rather than reading manifests, and it is the running root's report alone. Finally b3 — the published-migration-drift audit ({@see PublishedMigrationDriftAudit}, beam-facade ticket
      * 116): a copy under the host's `database/migrations/**` whose content no longer matches the package
      * file it was published from. It is last because it is the widest and purely advisory. All emit
      * {@see FixableFinding}s through the ticket-07/13 bridge.
@@ -89,6 +93,7 @@ class BuiltInAudits
             new UnsatisfiedNeighbourRequireAudit($this->appRoot),
             new UnsatisfiedRootRequireAudit($this->appRoot),
             new TransitiveSupplyAudit($this->appRoot),
+            new DanglingInstallPathAudit($this->appRoot),
             new PublishedMigrationDriftAudit($this->appRoot),
         ];
     }

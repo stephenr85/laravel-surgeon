@@ -238,11 +238,37 @@ class InstalledPackages
         return implode('\\', array_slice($parts, -$segments));
     }
 
-    /** Collapse `a/b/../c` install paths to a real absolute path (best-effort; falls back to the input). */
+    /**
+     * Collapse `a/b/../c` install paths to a real absolute path.
+     *
+     * The fallback matters more than the happy path. `realpath()` returns false for a path that does
+     * not exist, which is exactly the state {@see DanglingInstallPathAudit}'s Fail half is about — and
+     * composer records install paths relative to `vendor/composer/`, so the raw input reads
+     * `/root/vendor/composer/../acme/gone`. Returning that verbatim hands a reader a path with `..`
+     * still in it and makes an already-confusing finding harder. So a missing target collapses
+     * lexically instead: same directory, spelled the way a human would go look at it.
+     */
     private static function absolutize(string $path): string
     {
         $real = realpath($path);
 
-        return $real !== false ? $real : $path;
+        if ($real !== false) {
+            return $real;
+        }
+
+        $out = [];
+        foreach (explode('/', $path) as $segment) {
+            if ($segment === '' || $segment === '.') {
+                continue;
+            }
+            if ($segment === '..') {
+                array_pop($out);
+
+                continue;
+            }
+            $out[] = $segment;
+        }
+
+        return (str_starts_with($path, '/') ? '/' : '').implode('/', $out);
     }
 }

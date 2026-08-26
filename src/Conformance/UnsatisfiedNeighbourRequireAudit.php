@@ -53,6 +53,17 @@ use Rushing\Surgeon\Operation\SuggestsOperations;
  * Composer's record is the lock-time snapshot — the very state that is stale here. Reading the live file is
  * the whole point: it is what the host is actually running.
  *
+ * **An unreadable neighbour manifest is UNVERIFIED, not clean (ticket 74/92).** Reading the live file
+ * is what makes this check work, and it is also where it used to go blind: a neighbour whose
+ * `composer.json` could not be read was skipped with a bare `continue`, and the audit still printed
+ * its `.clean` pass with a count that looked truthful. The commonest cause of an unreadable manifest is
+ * a **dangling install path** — precisely the state {@see DanglingInstallPathAudit}'s Fail half names —
+ * so this audit reported green on exactly the roots that most needed it. That is ticket 72's fail-open
+ * shape wearing a pass line instead of a crash. Each unreadable neighbour is now its own **Warn**
+ * (`.unverified`) and the summary becomes `.partial`, stating how many of the path-installed packages
+ * it could actually read. Warn rather than Fail because nothing here says a dependency is missing —
+ * only that the question could not be asked.
+ *
  * **Scope: `require` only, never `require-dev`.** A dependency's dev requires are not installed for a
  * dependency, so flagging them would report composer behaving correctly.
  *
@@ -106,13 +117,25 @@ class UnsatisfiedNeighbourRequireAudit implements SuggestsOperations
 
         $findings = [];
         $checked = 0;
+        $unverified = 0;
 
         foreach ($linked as $package) {
-            $manifest = $this->readJson($package['path'].'/composer.json');
-            $requires = $manifest['require'] ?? [];
-            if (! is_array($requires)) {
+            $manifestPath = $package['path'].'/composer.json';
+            $manifest = $this->readJson($manifestPath);
+
+            // An unreadable manifest is UNVERIFIED, not clean (ticket 74/92). The commonest cause is
+            // the very defect DanglingInstallPathAudit's Fail half names: a dangling install path has
+            // no composer.json under it, so this loop used to `continue` and the neighbour's entire
+            // supply went unchecked while the `.clean` line below still printed a count that read as
+            // truthful. That is ticket 72's fail-open shape wearing a pass line instead of a crash.
+            if ($manifest === null || ! is_array($manifest['require'] ?? [])) {
+                $unverified++;
+                $findings[] = $this->unverifiable($root, $package['name'], $manifestPath, $manifest === null);
+
                 continue;
             }
+
+            $requires = $manifest['require'] ?? [];
 
             foreach (array_keys($requires) as $required) {
                 $required = (string) $required;
@@ -127,19 +150,67 @@ class UnsatisfiedNeighbourRequireAudit implements SuggestsOperations
             }
         }
 
-        if ($findings === []) {
-            $findings[] = new FixableFinding(Finding::pass(
-                self::CHECK.'.clean',
-                sprintf(
-                    'All %d require(s) declared by the %d path-installed package(s) here are present in this root\'s installed set. %s',
-                    $checked,
-                    count($linked),
-                    self::SCOPE_NOTE,
-                ),
-            ));
+        // The count is stated as "of how many it could read", never as a bare total — a summary that
+        // says "all N requires are present" while N was silently computed over a subset is the exact
+        // dishonesty this pass line used to carry.
+        $readable = count($linked) - $unverified;
+
+        if ($unverified === 0) {
+            if ($findings === []) {
+                $findings[] = new FixableFinding(Finding::pass(
+                    self::CHECK.'.clean',
+                    sprintf(
+                        'All %d require(s) declared by the %d path-installed package(s) here are present in this root\'s installed set. %s',
+                        $checked,
+                        count($linked),
+                        self::SCOPE_NOTE,
+                    ),
+                ));
+            }
+
+            return $findings;
         }
 
+        $findings[] = new FixableFinding(Finding::pass(
+            self::CHECK.'.partial',
+            sprintf(
+                'Checked %d require(s) across %d of %d path-installed package(s) — %d manifest(s) could not be read and their supply is UNVERIFIED, not clean. %s',
+                $checked,
+                $readable,
+                count($linked),
+                $unverified,
+                self::SCOPE_NOTE,
+            ),
+        ));
+
         return $findings;
+    }
+
+    /**
+     * A path-installed neighbour whose manifest could not be read at all, or whose `require` block is
+     * not an object. Warn rather than Fail: nothing here says a dependency is missing, only that the
+     * question could not be asked — and severity that overstates what was learned is how a report
+     * stops being read.
+     */
+    private function unverifiable(string $root, string $package, string $manifestPath, bool $absent): FixableFinding
+    {
+        $detail = sprintf(
+            '%s is installed here from a local path source but its manifest at %s %s — so this audit could NOT check that neighbour\'s requires, and its supply is unverified rather than clean. The commonest cause is a dangling install path (see the dangling-install-path check, whose Fail half names the same roots). %s',
+            $package,
+            $manifestPath,
+            $absent
+                ? 'is missing or does not parse as JSON'
+                : 'declares a `require` that is not an object',
+            self::SCOPE_NOTE,
+        );
+
+        return new FixableFinding(
+            Finding::warn(self::CHECK.'.unverified', $detail),
+            OperationSuggestion::advisory(
+                sprintf('Restore or regenerate %s at %s so its requires can be read — until then this root\'s supply report is incomplete, not green.', $package, $root),
+                'rushing/laravel-surgeon',
+            ),
+        );
     }
 
     /** Composer's own non-package requires: the runtime itself, extensions, libraries, and composer's APIs. */
@@ -182,14 +253,20 @@ class UnsatisfiedNeighbourRequireAudit implements SuggestsOperations
         );
     }
 
-    /** @return array<string, mixed> */
-    private function readJson(string $path): array
+    /**
+     * The neighbour's manifest, or **null when it could not be read** — the distinction the caller
+     * turns into a finding. An earlier revision folded both onto `[]`, which made "no manifest" and
+     * "a manifest declaring no requires" the same value and is why the miss was silent.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function readJson(string $path): ?array
     {
         if (! is_file($path)) {
-            return [];
+            return null;
         }
         $decoded = json_decode((string) @file_get_contents($path), true);
 
-        return is_array($decoded) ? $decoded : [];
+        return is_array($decoded) ? $decoded : null;
     }
 }

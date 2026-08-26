@@ -212,8 +212,11 @@ it('is registered as a built-in, so surgeon:audit runs it in every host', functi
 it('states Fail severity, which the built-in channel renders without reddening the exit code', function () {
     // The audit's own severity is Fail — there is one repair and the untreated state is a fatal
     // class-not-found. Whether that gates is the CHANNEL's call, and the built-in channel is
-    // uniformly non-gating (ConformanceSweep hardcodes gate: false for every surgeon-native audit,
-    // DanglingPathRepoAudit's live-brick Fail included). Asserted as it is, not as it ought to be.
+    // advisory BY CONTRACT (ticket 88): the sweep reads a per-audit opt-in off the host's own doctor
+    // manifest, so a built-in gates only where a host registered it with `gate: true`. This asserts
+    // the default a host gets without doing that. (The earlier wording here said the sweep HARDCODES
+    // `gate: false` for every built-in — true when written, no longer true, and left uncorrected it
+    // would keep being cited as the mechanism.) Asserted as it is, not as it ought to be.
     $root = neighbourRoot('gate', [
         'acme/linked' => ['source' => 'path', 'require' => ['acme/absent' => '^1.0']],
     ]);
@@ -225,6 +228,63 @@ it('states Fail severity, which the built-in channel renders without reddening t
         expect($report->results[0]->fixables[0]->finding->status)->toBe(DoctorStatus::Fail)
             ->and($report->results[0]->gate)->toBeFalse()
             ->and($report->hasGateFailure())->toBeFalse();
+    } finally {
+        surgeon_rrmdir($root);
+    }
+});
+
+it('reports an unreadable neighbour manifest as UNVERIFIED, never as clean', function () {
+    // Ticket 74/92's harder half. A path-installed package whose composer.json cannot be read used to
+    // hit a bare `continue`: that neighbour's entire supply went unchecked and the audit still printed
+    // its `.clean` pass with a count that read as truthful. The commonest cause of an unreadable
+    // manifest is a dangling install path — precisely the roots DanglingInstallPathAudit's Fail half
+    // names — so this check reported green on exactly the roots that most needed it. 72's fail-open
+    // shape wearing a pass line instead of a crash.
+    $root = surgeon_tmp('neighbour-unreadable');
+    surgeon_write($root.'/composer.json', json_encode(['name' => 'acme/host-app']));
+    surgeon_write($root.'/vendor/composer/installed.json', json_encode(['packages' => [[
+        'name' => 'acme/gone',
+        'install-path' => '../acme/gone',
+        'dist' => ['type' => 'path'],
+    ]]]));
+
+    try {
+        $findings = (new UnsatisfiedNeighbourRequireAudit($root))->suggestOperations();
+        $checks = array_map(fn ($f) => $f->finding->check, $findings);
+
+        expect($checks)->toContain(UnsatisfiedNeighbourRequireAudit::CHECK.'.unverified')
+            // The old summary is gone: a partial read may not wear the word "clean".
+            ->and($checks)->not->toContain(UnsatisfiedNeighbourRequireAudit::CHECK.'.clean')
+            ->and($checks)->toContain(UnsatisfiedNeighbourRequireAudit::CHECK.'.partial');
+
+        $unverified = array_values(array_filter($findings, fn ($f) => $f->finding->status === DoctorStatus::Warn));
+        expect($unverified)->toHaveCount(1)
+            ->and($unverified[0]->finding->detail)->toContain('is missing or does not parse as JSON')
+            ->and($unverified[0]->finding->detail)->toContain('unverified rather than clean');
+
+        // Warn, not Fail: nothing here says a dependency is absent, only that the question could not
+        // be asked, and severity that overstates what was learned is how a report stops being read.
+        expect(neighbourFailures($root))->toBeEmpty();
+
+        $partial = array_values(array_filter($findings, fn ($f) => $f->finding->check === UnsatisfiedNeighbourRequireAudit::CHECK.'.partial'));
+        expect($partial[0]->finding->detail)->toContain('across 0 of 1 path-installed package(s)')
+            ->and($partial[0]->finding->detail)->toContain('1 manifest(s) could not be read');
+    } finally {
+        surgeon_rrmdir($root);
+    }
+});
+
+it('still says clean when every neighbour manifest was readable — the honest count is not a permanent hedge', function () {
+    $root = neighbourRoot('all-readable', [
+        'acme/linked' => ['source' => 'path', 'require' => ['acme/present' => '^1.0']],
+        'acme/present' => [],
+    ]);
+
+    try {
+        $checks = array_map(fn ($f) => $f->finding->check, (new UnsatisfiedNeighbourRequireAudit($root))->suggestOperations());
+
+        expect($checks)->toContain(UnsatisfiedNeighbourRequireAudit::CHECK.'.clean')
+            ->and($checks)->not->toContain(UnsatisfiedNeighbourRequireAudit::CHECK.'.partial');
     } finally {
         surgeon_rrmdir($root);
     }
