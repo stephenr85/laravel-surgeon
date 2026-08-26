@@ -35,6 +35,16 @@ use Rushing\Surgeon\Operation\SuggestsOperations;
  * caveat on the finding rather than silently suppressing it, because a registry may or may not carry the
  * package and this audit does not go and look.
  *
+ * **It reads this repo's OWN require block, and that is NOT the question composer asks.** Composer
+ * resolves the whole graph from the ROOT's `repositories` list — a dependency's own repositories are
+ * ignored — so a private package reached TRANSITIVELY needs an entry here even though nothing in this
+ * manifest names it. This audit is therefore **green by construction** at every root in that class, and
+ * it was: measured on the beam-facade map twice, two days apart, it read green at all 5 of ticket 73's
+ * roots and all 21 of ticket 91's while every one of them failed `composer update`. Ticket 91 ruled the
+ * audit **stays** — it answers a true and cheap question — and that the resolvability question moves to a
+ * second instrument, {@see TransitiveSupplyAudit}. Nothing here should be read as "this root resolves";
+ * {@see self::notChecked()} now says so on every clean run rather than leaving a reader to discover it.
+ *
  * **The two things this audit does NOT know, and says so.** Packagist membership and remote
  * reachability. Both need the network; this is a manifest-and-filesystem question by construction
  * ({@see DanglingPathRepoAudit} makes the same declaration for the same reason). A package that IS on
@@ -100,18 +110,18 @@ class RequireWithoutSupplyAudit implements SuggestsOperations
         }
 
         $pathSupply = $this->pathSupply($root, $overlayFile);
-        $declared = $this->declaredSupply($base, $overlay);
+        $declared = DeclaredSupply::read($base, $overlay);
 
         $findings = [];
         foreach ($requires as $name) {
             if (! isset($pathSupply[$name])) {
                 continue; // resolves from a declared repository or Packagist — not this audit's question
             }
-            if ($this->isDeclared($name, $declared)) {
+            if ($declared->declares($name)) {
                 continue;
             }
 
-            $findings[] = $this->unsupplied($name, $pathSupply[$name], $declared['opaque']);
+            $findings[] = $this->unsupplied($name, $pathSupply[$name], $declared->opaque);
         }
 
         if ($findings === []) {
@@ -132,7 +142,11 @@ class RequireWithoutSupplyAudit implements SuggestsOperations
     /** The standing caveat, in one place: both gaps are named rather than left implicit. */
     public static function notChecked(): string
     {
-        return 'Not checked: Packagist membership and remote reachability — this is a manifest-and-filesystem question.';
+        return 'Not checked: Packagist membership, remote reachability, and — the one most often misread —'
+            .' the TRANSITIVE closure. This reads only this repo\'s own require block, and composer resolves'
+            .' the whole graph from this root\'s repositories list, so a clean result here does NOT mean this'
+            .' root resolves ('.TransitiveSupplyAudit::CHECK.' asks that question). This is a'
+            .' manifest-and-filesystem question.';
     }
 
     /**
@@ -192,85 +206,6 @@ class RequireWithoutSupplyAudit implements SuggestsOperations
         }
 
         return $supply;
-    }
-
-    /**
-     * The repo's non-path supply, in the two shapes that can be read without a network: exact names
-     * inlined by a `package` repository, and the urls of everything else (matched on stem). A
-     * `composer`-type registry is neither — it is opaque, and travels as a caveat.
-     *
-     * @param  array<string, mixed>  $base
-     * @param  array<string, mixed>  $overlay
-     * @return array{names: list<string>, urls: list<string>, opaque: list<string>}
-     */
-    private function declaredSupply(array $base, array $overlay): array
-    {
-        $names = [];
-        $urls = [];
-        $opaque = [];
-
-        foreach ([$base['repositories'] ?? [], $overlay['repositories'] ?? []] as $repositories) {
-            if (! is_array($repositories)) {
-                continue;
-            }
-
-            foreach ($repositories as $repo) {
-                if (! is_array($repo)) {
-                    continue; // `"packagist.org": false` and friends
-                }
-
-                $type = $repo['type'] ?? null;
-                $url = isset($repo['url']) && is_string($repo['url']) ? $repo['url'] : null;
-
-                if ($type === 'path') {
-                    continue;
-                }
-
-                if ($type === 'package') {
-                    $inlined = $repo['package']['name'] ?? null;
-                    if (is_string($inlined)) {
-                        $names[] = $inlined;
-                    }
-
-                    continue;
-                }
-
-                if ($type === 'composer' && $url !== null && ! str_contains($url, 'packagist.org')) {
-                    $opaque[] = $url;
-
-                    continue;
-                }
-
-                if ($url !== null) {
-                    $urls[] = $url;
-                }
-            }
-        }
-
-        return ['names' => $names, 'urls' => $urls, 'opaque' => $opaque];
-    }
-
-    /**
-     * Does anything non-path in this repo claim to supply the package? Exact on an inlined name;
-     * otherwise the package's stem appearing in a repository url, which is the only offline reading a
-     * vcs entry admits (it names a remote, never a package).
-     *
-     * @param  array{names: list<string>, urls: list<string>, opaque: list<string>}  $declared
-     */
-    private function isDeclared(string $name, array $declared): bool
-    {
-        if (in_array($name, $declared['names'], true)) {
-            return true;
-        }
-
-        $stem = substr($name, (int) strpos($name, '/') + 1);
-        foreach ($declared['urls'] as $url) {
-            if ($stem !== '' && str_contains($url, $stem)) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     /**

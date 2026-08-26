@@ -58,8 +58,17 @@ class BuiltInAudits
      * and the require-without-supply audit (a require whose only declared source is a path repo, so it
      * resolves here and nowhere else), then the third supply check — the unsatisfied-neighbour-require
      * audit (a path-INSTALLED package requiring something this root's installed set does not carry, which
-     * neither manifest-reading sibling can see because the require belongs to a neighbour), and finally
-     * b3 — the published-migration-drift audit ({@see PublishedMigrationDriftAudit}, beam-facade ticket
+     * neither manifest-reading sibling can see because the require belongs to a neighbour), then the fourth
+     * and fifth — the unsatisfied-root-require audit ({@see UnsatisfiedRootRequireAudit}, beam-facade ticket
+     * 129) and the transitive-supply audit ({@see TransitiveSupplyAudit}, ticket 129). The root-require one
+     * catches the estate's loudest failure and the one no other check sees: a package this root itself
+     * requires that is absent from its own installed set, which dies at BOOT with zero assertions and reads
+     * exactly like a real regression. The transitive one answers the question
+     * {@see RequireWithoutSupplyAudit} is green-by-construction on — a private package reached
+     * TRANSITIVELY with no `repositories` entry at this root, which is what composer actually resolves
+     * against. It nominates and never certifies, and it stamps the mode (overlay-present/absent) it
+     * answered in on every finding, because the same root gives different answers in the two modes and a
+     * bare zero is unreadable. Finally b3 — the published-migration-drift audit ({@see PublishedMigrationDriftAudit}, beam-facade ticket
      * 116): a copy under the host's `database/migrations/**` whose content no longer matches the package
      * file it was published from. It is last because it is the widest and purely advisory. All emit
      * {@see FixableFinding}s through the ticket-07/13 bridge.
@@ -78,6 +87,8 @@ class BuiltInAudits
             new DanglingPathRepoAudit($this->appRoot),
             new RequireWithoutSupplyAudit($this->appRoot),
             new UnsatisfiedNeighbourRequireAudit($this->appRoot),
+            new UnsatisfiedRootRequireAudit($this->appRoot),
+            new TransitiveSupplyAudit($this->appRoot),
             new PublishedMigrationDriftAudit($this->appRoot),
         ];
     }
