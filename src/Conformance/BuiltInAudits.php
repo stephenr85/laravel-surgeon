@@ -79,7 +79,14 @@ class BuiltInAudits
      * dependency shipping a service provider its own `tests/` never names, so testbench boots a container
      * the host would have filled and the suite proves less than it looks like it proves. It sits at the
      * tail because, alone in this set, nothing it reports is broken at THIS root — the finding is about
-     * what another repo's suite fails to prove. These two are the widest and purely advisory. All emit
+     * what another repo's suite fails to prove. Beside it is the unresolvable-import audit
+     * ({@see UnresolvableImportAudit}, api-surface-coherence ticket 87): a `use` import in a package's
+     * `src/` that resolves to no file on disk. It is the SIXTH supply check and the first that does not
+     * read a manifest — the five before it read `require` blocks, `repositories` lists and installed
+     * rosters, and an import is none of those, so the defect is invisible to every one of them by
+     * construction. Its Fail case is the narrow one that cannot be guarded at a call site: an absent
+     * class used in a class-load position (`extends`, `implements`, a trait `use`), which PHP resolves
+     * at class-declaration time. These three are the widest and purely advisory. All emit
      * {@see FixableFinding}s through the ticket-07/13 bridge.
      *
      * @return list<SuggestsOperations>
@@ -101,6 +108,7 @@ class BuiltInAudits
             new DanglingInstallPathAudit($this->appRoot),
             new PublishedMigrationDriftAudit($this->appRoot),
             new HarnessProviderAudit($this->appRoot),
+            new UnresolvableImportAudit($this->appRoot),
         ];
     }
 }
