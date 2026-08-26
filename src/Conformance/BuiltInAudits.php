@@ -74,7 +74,12 @@ class BuiltInAudits
      * composer has never heard of. It sits after the supply checks because it is the only one that walks
      * the filesystem rather than reading manifests, and it is the running root's report alone. Finally b3 — the published-migration-drift audit ({@see PublishedMigrationDriftAudit}, beam-facade ticket
      * 116): a copy under the host's `database/migrations/**` whose content no longer matches the package
-     * file it was published from. It is last because it is the widest and purely advisory. All emit
+     * file it was published from. Last is the harness-provider audit
+     * ({@see HarnessProviderAudit}, api-surface-coherence ticket 86): a package whose `src/` imports a
+     * dependency shipping a service provider its own `tests/` never names, so testbench boots a container
+     * the host would have filled and the suite proves less than it looks like it proves. It sits at the
+     * tail because, alone in this set, nothing it reports is broken at THIS root — the finding is about
+     * what another repo's suite fails to prove. These two are the widest and purely advisory. All emit
      * {@see FixableFinding}s through the ticket-07/13 bridge.
      *
      * @return list<SuggestsOperations>
@@ -95,6 +100,7 @@ class BuiltInAudits
             new TransitiveSupplyAudit($this->appRoot),
             new DanglingInstallPathAudit($this->appRoot),
             new PublishedMigrationDriftAudit($this->appRoot),
+            new HarnessProviderAudit($this->appRoot),
         ];
     }
 }
