@@ -58,7 +58,10 @@ class BuiltInAudits
      * and the require-without-supply audit (a require whose only declared source is a path repo, so it
      * resolves here and nowhere else), then the third supply check — the unsatisfied-neighbour-require
      * audit (a path-INSTALLED package requiring something this root's installed set does not carry, which
-     * neither manifest-reading sibling can see because the require belongs to a neighbour). All emit
+     * neither manifest-reading sibling can see because the require belongs to a neighbour), and finally
+     * b3 — the published-migration-drift audit ({@see PublishedMigrationDriftAudit}, beam-facade ticket
+     * 116): a copy under the host's `database/migrations/**` whose content no longer matches the package
+     * file it was published from. It is last because it is the widest and purely advisory. All emit
      * {@see FixableFinding}s through the ticket-07/13 bridge.
      *
      * @return list<SuggestsOperations>
@@ -75,6 +78,7 @@ class BuiltInAudits
             new DanglingPathRepoAudit($this->appRoot),
             new RequireWithoutSupplyAudit($this->appRoot),
             new UnsatisfiedNeighbourRequireAudit($this->appRoot),
+            new PublishedMigrationDriftAudit($this->appRoot),
         ];
     }
 }
