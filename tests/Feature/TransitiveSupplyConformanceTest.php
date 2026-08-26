@@ -202,3 +202,31 @@ it('ships on the built-in channel', function () {
 
     expect($classes)->toContain(TransitiveSupplyAudit::class);
 });
+
+it('does not let a longer sibling repo name stand in as supply — the under-reporting direction', function () {
+    $root = transitiveRoot('prefix', ['name' => 'acme/host', 'require' => ['acme/beam' => '*']], [
+        'acme/beam' => ['require' => [], 'origin' => 'https://github.com/org/beam.git'],
+    ]);
+
+    try {
+        // `beam-notifications` is a DIFFERENT package; a substring match reads it as supply for `beam`
+        // and the check then reports a gap filled that composer walls on (found live at
+        // ~/Herd/stephenrushing, where seeding the whole nominated closure still left one residual).
+        $manifest = json_decode(file_get_contents($root.'/composer.json'), true);
+        $manifest['repositories'][] = ['type' => 'vcs', 'url' => 'https://github.com/org/beam-notifications.git'];
+        file_put_contents($root.'/composer.json', json_encode($manifest, JSON_PRETTY_PRINT));
+
+        $warnings = transitiveFindings($root, DoctorStatus::Warn);
+
+        expect($warnings)->toHaveCount(1)
+            ->and($warnings[0]->finding->detail)->toContain('acme/beam');
+
+        // …and the real entry does supply it, however the vendor half was renamed on the way to a remote.
+        $manifest['repositories'][] = ['type' => 'vcs', 'url' => 'https://github.com/org/beam.git'];
+        file_put_contents($root.'/composer.json', json_encode($manifest, JSON_PRETTY_PRINT));
+
+        expect(transitiveFindings($root, DoctorStatus::Warn))->toBeEmpty();
+    } finally {
+        surgeon_rrmdir(dirname($root));
+    }
+});

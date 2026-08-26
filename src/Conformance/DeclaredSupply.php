@@ -21,9 +21,17 @@ namespace Rushing\Surgeon\Conformance;
  * **The three readings, and why there are exactly three:**
  *  - a `package` repository inlines a package name → matched **exactly**;
  *  - a `vcs`/`git`/`github`-style entry names a **remote, never a package** → the only offline reading
- *    is its url carrying the package's stem. This estate makes that necessary rather than merely
- *    convenient: `rushing/*` packages are supplied from the `stephenr85` GitHub org, so the vendor half
- *    of the name appears in no url anywhere;
+ *    is its url's repo name against the package's stem. This estate makes that necessary rather than
+ *    merely convenient: `rushing/*` packages are supplied from the `stephenr85` GitHub org, so the vendor
+ *    half of the name appears in no url anywhere. The match is **boundary-aware, not a substring**, and
+ *    that is a correction rather than a refinement: a bare `str_contains` lets
+ *    `.../laravel-beam-notifications.git` read as supply for `splicewire/laravel-beam`, which is the
+ *    UNDER-reporting direction — a supply check that silently declares a gap filled. Found by resolving
+ *    `~/Herd/stephenrushing` after seeding its closure (beam-facade ticket 131): every nominated entry
+ *    was written, the check then read clean, and composer still walled on `splicewire/laravel-beam`. The
+ *    rule now demands the repo name **equal** the stem or differ from it only by a `-`-delimited prefix
+ *    (`laravel-package-topology.git` supplying `rushing/php-package-topology` stays out of reach, which
+ *    over-reports — the safe direction for an instrument that nominates and never certifies);
  *  - a `composer` registry is **opaque offline** — it may or may not carry the package and this class
  *    does not go and look, so it travels as a caveat on the finding rather than silently suppressing it.
  */
@@ -101,7 +109,8 @@ class DeclaredSupply
 
     /**
      * Does anything non-path here claim to supply the package? Exact on an inlined name; otherwise the
-     * package's stem appearing in a repository url, which is the only offline reading a vcs entry admits.
+     * repository url's own repo name against the package's stem, which is the only offline reading a vcs
+     * entry admits — boundary-aware, for the reason in the class docblock.
      */
     public function declares(string $name): bool
     {
@@ -115,12 +124,37 @@ class DeclaredSupply
         }
 
         foreach ($this->urls as $url) {
-            if (str_contains($url, $stem)) {
+            if ($this->matches($this->repoNameOf($url), $stem)) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /** The repo name a url names: its last path segment, without a `.git` suffix or a trailing slash. */
+    public function repoNameOf(string $url): string
+    {
+        $trimmed = rtrim($url, '/');
+        $slash = strrpos($trimmed, '/');
+        $repo = $slash === false ? $trimmed : substr($trimmed, $slash + 1);
+
+        return str_ends_with($repo, '.git') ? substr($repo, 0, -4) : $repo;
+    }
+
+    /**
+     * A repo name supplies a package stem when the two are equal, or differ only by a `-`-delimited
+     * prefix on one side — the estate renames a package's vendor half far more often than its tail
+     * (`schemastud/php-json-ns` ships from `php-json-ns.git`, `splicewire/laravel-satellite` from
+     * `laravel-satellite.git`). What it must NOT accept is a longer name that merely STARTS with the
+     * stem: `laravel-beam-notifications` is a different package from `laravel-beam`, and treating it as
+     * supply is how a supply check reports a gap filled that composer then walls on.
+     */
+    private function matches(string $repo, string $stem): bool
+    {
+        return $repo === $stem
+            || str_ends_with($repo, '-'.$stem)
+            || str_ends_with($stem, '-'.$repo);
     }
 
     /** The package half of a `vendor/name`, which is what a supply url actually carries. */
