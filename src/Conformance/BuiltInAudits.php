@@ -86,7 +86,14 @@ class BuiltInAudits
      * rosters, and an import is none of those, so the defect is invisible to every one of them by
      * construction. Its Fail case is the narrow one that cannot be guarded at a call site: an absent
      * class used in a class-load position (`extends`, `implements`, a trait `use`), which PHP resolves
-     * at class-declaration time. These three are the widest and purely advisory. All emit
+     * at class-declaration time. These three are the widest and purely advisory. Last of all is the
+     * deploy-pointer audit ({@see DeployPointerAudit}, beam-facade ticket 118) — the only member of this
+     * set whose population comes from OUTSIDE every package (`$SCRIPTORIUM_CORPUS/deployments/`), and the
+     * only one reporting a fact about a machine rather than about code. It sits at the tail because it is
+     * the widest-scoped and the most conditional: it answers *"is this checkout's deploy pointer described,
+     * and how old is the reading?"* and it deliberately refuses to ship the bare lag number that would fail
+     * toward reassurance. Its detection is UNAVAILABLE wherever the corpus is not readable — a Warn at a
+     * root carrying a deploy remote, a Pass everywhere else. All emit
      * {@see FixableFinding}s through the ticket-07/13 bridge.
      *
      * @return list<SuggestsOperations>
@@ -109,6 +116,7 @@ class BuiltInAudits
             new PublishedMigrationDriftAudit($this->appRoot),
             new HarnessProviderAudit($this->appRoot),
             new UnresolvableImportAudit($this->appRoot),
+            new DeployPointerAudit($this->appRoot),
         ];
     }
 }
