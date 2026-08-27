@@ -95,3 +95,54 @@ it('applies a same-namespace class rename: declaration token, basename move, and
         surgeon_rrmdir($root);
     }
 });
+
+it('refuses when uncommitted changes overlap the planned edits', function () {
+    $root = surgeon_psr4_root('cmd-dirty-overlap');
+
+    try {
+        $from = writeFindingSet($root, 'App\\Old\\Widget', 'App\\New\\Widget');
+        surgeon_git_init($root);
+
+        // Consumer.php is IN the plan — this is the case the gate exists for.
+        file_put_contents($root.'/src/Consumer.php', file_get_contents($root.'/src/Consumer.php')."\n// a neighbour is mid-edit\n");
+        $before = file_get_contents($root.'/src/Consumer.php');
+
+        $this->artisan('surgeon:move', [
+            '--from' => $from,
+            '--apply' => true,
+            '--root' => [$root],
+            '--no-composer' => true,
+        ])->assertExitCode(Command::FAILURE);
+
+        // Refused means refused: the neighbour's edit is untouched and nothing moved.
+        expect(file_get_contents($root.'/src/Consumer.php'))->toBe($before)
+            ->and(is_file($root.'/src/New/Widget.php'))->toBeFalse();
+    } finally {
+        surgeon_rrmdir($root);
+    }
+});
+
+it('proceeds when the root is dirty only outside the planned edits', function () {
+    $root = surgeon_psr4_root('cmd-dirty-elsewhere');
+
+    try {
+        $from = writeFindingSet($root, 'App\\Old\\Widget', 'App\\New\\Widget');
+        surgeon_git_init($root);
+
+        // Dirt the plan never opens. Refusing on this is what made a multi-root sweep unpassable.
+        surgeon_write($root.'/src/Unrelated.php', "<?php\n\nnamespace App;\n\nclass Unrelated {}\n");
+
+        $this->artisan('surgeon:move', [
+            '--from' => $from,
+            '--apply' => true,
+            '--root' => [$root],
+            '--no-composer' => true,
+        ])->assertExitCode(Command::SUCCESS);
+
+        expect(file_get_contents($root.'/src/Consumer.php'))->toContain('use App\\New\\Widget;')
+            // and the bystander is exactly as the neighbour left it
+            ->and(file_get_contents($root.'/src/Unrelated.php'))->toContain('class Unrelated {}');
+    } finally {
+        surgeon_rrmdir($root);
+    }
+});

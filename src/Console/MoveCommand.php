@@ -27,7 +27,9 @@ use Rushing\Surgeon\Rewrite\TouchManifest;
  *  - **Named blast radius.** `--root` names which trees a write may touch; edits outside are refused
  *    (defaults to the finding-set's own roots — overlay membership makes `--root` ergonomic, never
  *    implicit).
- *  - **Clean-tree gate** per root (skippable with `--allow-dirty`, whose recovery is manifest-scoped).
+ *  - **Plan-aware dirty gate** per root: uncommitted changes that OVERLAP the planned edits refuse the
+ *    write; dirt elsewhere in the same root is reported and allowed. `--allow-dirty` still overrides
+ *    both, and its recovery stays manifest-scoped.
  *  - **No auto-commit.** Changes are left in the tree with a touch-manifest sidecar as the review +
  *    scoped-undo surface.
  *  - **Deterministic post-write gate** (`php -l` → `dump-autoload` → topology) with manifest-scoped
@@ -41,7 +43,7 @@ class MoveCommand extends Command
         {--from= : Path to a surgeon:trace --out finding-set — the resolved operation set to apply}
         {--apply : Write the changes (default: preview only, no writes)}
         {--root=* : Roots this move may touch; edits outside are refused (defaults to the finding-set roots)}
-        {--allow-dirty : Proceed even if a --root working tree is dirty (recovery stays manifest-scoped)}
+        {--allow-dirty : Proceed even when uncommitted changes overlap the planned edits (recovery stays manifest-scoped)}
         {--manifest= : Where to write the touch-manifest sidecar (default: <cwd>/.surgeon/move-manifest.json)}
         {--no-verify : Skip the deterministic post-write gate}
         {--no-composer : Within the gate, skip composer dump-autoload}';
@@ -129,13 +131,21 @@ class MoveCommand extends Command
     private function apply(RewritePlan $plan, AuditReport $report, array $roots, RelocationOperation $operation): int
     {
         if (! $this->option('allow-dirty')) {
-            $dirty = $this->firstDirtyRoot($roots);
-            if ($dirty !== null) {
-                $this->error("refusing to write: working tree is dirty at {$dirty['root']}");
-                $this->line($dirty['status']);
-                $this->line('<fg=yellow>Commit/stash first, or pass --allow-dirty (recovery stays manifest-scoped).</>');
+            $conflict = $this->firstConflictingRoot($plan, $roots);
+            if ($conflict !== null) {
+                $this->error("refusing to write: uncommitted changes OVERLAP this plan at {$conflict['root']}");
+                foreach ($conflict['files'] as $f) {
+                    $this->line("  {$f}");
+                }
+                $this->line('<fg=yellow>Someone is editing a file this move rewrites. Commit/stash those files, or pass --allow-dirty to splice over them anyway (recovery stays manifest-scoped).</>');
 
                 return self::FAILURE;
+            }
+
+            // Dirt that does NOT touch the plan is reported and allowed. Saying so is what makes it
+            // safe to allow — a silent pass here would look identical to a clean tree.
+            foreach ($this->dirtyRootsOutsidePlan($plan, $roots) as $root => $count) {
+                $this->warn("{$root}: {$count} uncommitted file(s), none in this plan — proceeding.");
             }
         }
 
@@ -413,19 +423,140 @@ class MoveCommand extends Command
      * @param  list<string>  $roots
      * @return array{root: string, status: string}|null
      */
-    private function firstDirtyRoot(array $roots): ?array
+    /**
+     * Every absolute path this plan will write — the only files a dirty tree can actually endanger.
+     *
+     * @return array<string, true>
+     */
+    private function planFiles(RewritePlan $plan): array
     {
-        foreach ($roots as $root) {
-            if (! is_dir($root.'/.git') && ! $this->insideGitRepo($root)) {
-                continue; // not a git repo — nothing to protect; in-memory rollback still applies.
+        $files = [];
+        foreach ($plan->edits as $edit) {
+            $files[$this->canonical($edit->file)] = true;
+        }
+        foreach ($plan->moves as $move) {
+            $files[$this->canonical($move->from)] = true;
+            $files[$this->canonical($move->to)] = true;
+        }
+
+        return $files;
+    }
+
+    /**
+     * One spelling for one file, so the dirty gate can compare at all.
+     *
+     * `realpath()` resolves symlinks and `..`, and the two sides of this comparison reach a file by
+     * different routes: the plan carries paths the audit walked, while the gate builds
+     * `<root>/<git status path>`. That difference is not hypothetical here — under the co-dev overlay
+     * EVERY package root is a symlink into a sibling working tree, and on macOS a temp root is
+     * `/var/…` whose realpath is `/private/var/…`. Unnormalised, the overlap check silently never
+     * matches, which fails OPEN: the gate reports clean and the writer splices a file someone else
+     * is editing.
+     *
+     * A move destination does not exist yet, so realpath returns false there — keep the raw path.
+     */
+    private function canonical(string $path): string
+    {
+        return realpath($path) ?: $path;
+    }
+
+    /**
+     * The uncommitted paths in one root, absolute. Returns null when the root is not a git repo.
+     *
+     * Fails SAFE: a `git status` line this cannot parse is returned as the literal root, which can
+     * never equal a plan file and therefore reports as an overlap rather than being skipped. An
+     * unreadable status must not read as a clean one.
+     *
+     * @return list<string>|null
+     */
+    private function dirtyPaths(string $root): ?array
+    {
+        if (! is_dir($root.'/.git') && ! $this->insideGitRepo($root)) {
+            return null; // not a git repo — nothing to protect; in-memory rollback still applies.
+        }
+        $proc = Process::path($root)->run(['git', 'status', '--porcelain']);
+        if (! $proc->successful()) {
+            return [$root]; // cannot tell — treat as conflicting
+        }
+
+        $paths = [];
+        // rtrim the TRAILING newline only. `trim()` here strips the leading space of the FIRST line —
+        // an unstaged modification is " M path", so the first entry alone loses a column and every
+        // offset after it shifts by one. That reads as a path that does not exist, which fails OPEN.
+        foreach (explode("\n", rtrim($proc->output(), "\n")) as $line) {
+            if ($line === '') {
+                continue;
             }
-            $proc = Process::path($root)->run(['git', 'status', '--short']);
-            if ($proc->successful() && trim($proc->output()) !== '') {
-                return ['root' => $root, 'status' => rtrim($proc->output())];
+            // XY<space>PATH. Parse it rather than counting bytes, so a malformed line is visible.
+            if (! preg_match('/^(..) (.+)$/', $line, $m)) {
+                $paths[] = $root;
+
+                continue;
+            }
+            $rest = $m[2];
+            // A rename reads `old -> new`; the destination is what the tree now holds.
+            if (($arrow = strpos($rest, ' -> ')) !== false) {
+                $rest = substr($rest, $arrow + 4);
+            }
+            $paths[] = $this->canonical($root.'/'.trim($rest, '"'));
+        }
+
+        return $paths;
+    }
+
+    /**
+     * The first root whose uncommitted changes touch a file this plan rewrites.
+     *
+     * Plan-aware on purpose. The gate exists to stop the writer splicing a file someone else is
+     * editing — and a root dirty in files the plan never opens is not that. Refusing on ANY dirt
+     * made the gate unpassable for a sweep spanning many roots (a 15-root rename in a fleet where
+     * concurrent sessions are normal), and the only escape was `--allow-dirty`, which disables the
+     * check for EVERY root including the one actually in conflict. That is backwards: the blanket
+     * form is more dangerous than the precise one it was standing in for.
+     *
+     * @param  list<string>  $roots
+     * @return array{root: string, files: list<string>}|null
+     */
+    private function firstConflictingRoot(RewritePlan $plan, array $roots): ?array
+    {
+        $planFiles = $this->planFiles($plan);
+
+        foreach ($roots as $root) {
+            $dirty = $this->dirtyPaths($root);
+            if ($dirty === null) {
+                continue;
+            }
+            $overlap = array_values(array_filter($dirty, fn ($p) => isset($planFiles[$p])));
+            if ($overlap !== []) {
+                return ['root' => $root, 'files' => $overlap];
             }
         }
 
         return null;
+    }
+
+    /**
+     * Roots that are dirty but do not collide with the plan, and how many files each has.
+     *
+     * @param  list<string>  $roots
+     * @return array<string, int>
+     */
+    private function dirtyRootsOutsidePlan(RewritePlan $plan, array $roots): array
+    {
+        $planFiles = $this->planFiles($plan);
+        $out = [];
+        foreach ($roots as $root) {
+            $dirty = $this->dirtyPaths($root);
+            if ($dirty === null || $dirty === []) {
+                continue;
+            }
+            $clean = array_filter($dirty, fn ($p) => ! isset($planFiles[$p]));
+            if ($clean !== []) {
+                $out[$root] = count($clean);
+            }
+        }
+
+        return $out;
     }
 
     private function insideGitRepo(string $root): bool
