@@ -93,7 +93,16 @@ class BuiltInAudits
      * the widest-scoped and the most conditional: it answers *"is this checkout's deploy pointer described,
      * and how old is the reading?"* and it deliberately refuses to ship the bare lag number that would fail
      * toward reassurance. Its detection is UNAVAILABLE wherever the corpus is not readable — a Warn at a
-     * root carrying a deploy remote, a Pass everywhere else. All emit
+     * root carrying a deploy remote, a Pass everywhere else. Beside it is the unmapped-convergent-type
+     * audit ({@see UnmappedConvergentTypeAudit}, beam-facade ticket 183a): a column type declared in a
+     * convergent migration stub that `ColumnTypeEquivalence` has no mapping for, and would therefore
+     * report `unverified` — the file-only half of the measurement beam-facade 115 required before any
+     * populated-table escalation ships. It is here rather than in beam because five BEAMLESS `rushing/*`
+     * packages carry convergent guards while every other convergence instrument is beam-tier; its rows
+     * half (183b) is beam-tier by construction, since learning a stub's declared shape by execution needs
+     * `MigrationRehearsal`, which surgeon cannot reach without inverting the tier. It guards
+     * `Rushing\SchemaConvergence\ColumnTypeEquivalence` behind `class_exists()` — schema-convergence is
+     * not a dependency here and must not become one. All emit
      * {@see FixableFinding}s through the ticket-07/13 bridge.
      *
      * @return list<SuggestsOperations>
@@ -116,6 +125,7 @@ class BuiltInAudits
             new PublishedMigrationDriftAudit($this->appRoot),
             new HarnessProviderAudit($this->appRoot),
             new UnresolvableImportAudit($this->appRoot),
+            new UnmappedConvergentTypeAudit($this->appRoot),
             new DeployPointerAudit($this->appRoot),
         ];
     }
