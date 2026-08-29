@@ -241,6 +241,92 @@ it('never emits a Fail — an incomplete map is not a broken repo', function () 
     }
 });
 
+/**
+ * beam-facade 187 — the estate's real second spelling. `create_beam_ownership_edges_table.php.stub`
+ * binds the table NAME to `$table` and the Blueprint to `$t`, so a scan hardcoded to `$table->` read
+ * nothing out of it and counted it as covered anyway. Four estate files were in that state.
+ */
+function convergentStubBoundTo(string $var, string $body): string
+{
+    return <<<PHP
+    <?php
+
+    use Illuminate\\Database\\Schema\\Blueprint;
+    use Rushing\\SchemaConvergence\\ConvergentTable;
+
+    return new class extends Migration
+    {
+        public function up(): void
+        {
+            \$table = 'widgets';
+
+            ConvergentTable::named(\$table)
+                ->define(function (Blueprint \${$var}) use (\$table) {
+                    {$body}
+                })
+                ->assert();
+        }
+    };
+
+    PHP;
+}
+
+it('reads a Blueprint bound to a name other than $table, instead of silently reading nothing', function () {
+    $root = convergentRoot('other-var', [
+        'create_widgets_table.php.stub' => convergentStubBoundTo('t', "\$t->geometry('shape');\n\$t->string('name');"),
+    ]);
+
+    try {
+        $findings = convergentFindings($root, fakeMap(['string']));
+
+        expect($findings)->toHaveKey(UnmappedConvergentTypeAudit::CHECK.'.unmapped')
+            ->and($findings[UnmappedConvergentTypeAudit::CHECK.'.unmapped']->detail)->toContain('`geometry`')
+            ->and($findings)->not->toHaveKey(UnmappedConvergentTypeAudit::CHECK.'.unread');
+    } finally {
+        surgeon_rrmdir($root);
+    }
+});
+
+it('reports a convergent file it read nothing out of, rather than counting it as covered', function () {
+    // Mentions the marker in prose only — the substring marker cannot tell this from a call, which is
+    // exactly why the file has to be reported rather than absorbed.
+    $root = convergentRoot('unread', [
+        'create_widgets_table.php.stub' => convergentStub("\$table->string('name');"),
+        '2026_01_01_000000_rename_widgets.php' => "<?php\n\n/** Renames the table a ConvergentTable stub elsewhere owns. */\nreturn new class extends Migration {};\n",
+    ]);
+
+    try {
+        $findings = convergentFindings($root, fakeMap(['string']));
+
+        expect($findings[UnmappedConvergentTypeAudit::CHECK.'.unread']->status)->toBe(DoctorStatus::Warn)
+            ->and($findings[UnmappedConvergentTypeAudit::CHECK.'.unread']->detail)
+            ->toContain('1 of 2')
+            ->toContain('2026_01_01_000000_rename_widgets.php')
+            // The coverage line must count the stubs READ, never the stubs found.
+            ->and($findings[UnmappedConvergentTypeAudit::CHECK.'.covered']->detail)->toContain('across 1 read convergent stub')
+            ->and($findings[UnmappedConvergentTypeAudit::CHECK.'.scope']->detail)->toContain('1 stub(s) were READ');
+    } finally {
+        surgeon_rrmdir($root);
+    }
+});
+
+it('keeps $table readable when the closure carries no Blueprint type hint at all', function () {
+    $root = convergentRoot('untyped', [
+        'create_widgets_table.php.stub' => str_replace(
+            'Blueprint $table',
+            '$table',
+            convergentStub("\$table->geometry('shape');")
+        ),
+    ]);
+
+    try {
+        expect(convergentFindings($root, fakeMap([]))[UnmappedConvergentTypeAudit::CHECK.'.unmapped']->detail)
+            ->toContain('geometry');
+    } finally {
+        surgeon_rrmdir($root);
+    }
+});
+
 it('is registered in the built-in set so surgeon:audit runs it', function () {
     $audits = (new BuiltInAudits('/nonexistent-root'))->audits();
 

@@ -64,6 +64,15 @@ use Rushing\Surgeon\Operation\SuggestsOperations;
  *   scan cannot evaluate, is seen as declared unconditionally. That is the right direction to be wrong in
  *   for an advisory census — it over-reports rather than under-reports — but it is not a substitute for
  *   183b, and the scope finding says so.
+ * - **A stub the scan read NOTHING out of is reported, not absorbed** ({@see self::CHECK}`.unread`,
+ *   beam-facade 187). This is the counter the first version did not have, and its absence was live:
+ *   measured 2026-08-29, **5 of 310 distinct convergent source files across the estate yielded zero
+ *   parsed declarations** — four of them the `create_beam_ownership_edges_table` family, which names its
+ *   Blueprint closure parameter `$t` rather than `$table`. Those four were counted in the `.covered`
+ *   Pass line's *"across N convergent stub(s)"* and contributed nothing to it: a **vacuous pass**, in
+ *   exactly the shape where the report reads most thorough. The variable-name half is now fixed (see
+ *   {@see self::blueprintVariablesIn()}); the counter stays regardless, because the next cause will not
+ *   be a variable name.
  *
  * **Advisory, never a gate.** What this reports is a fact about a *map's* coverage, and its remedy is
  * "add the pairing", which is cheap. Nothing here should redden an exit code.
@@ -74,6 +83,9 @@ class UnmappedConvergentTypeAudit implements SuggestsOperations
 
     /** The marker that makes a migration file this audit's business at all. */
     public const MARKER = 'ConvergentTable';
+
+    /** The variable name a Blueprint is bound to when the file gives no typed hint to read. */
+    public const DEFAULT_BLUEPRINT_VAR = 'table';
 
     /**
      * Blueprint methods that declare no column — indexes, constraints, table-level settings, drops.
@@ -223,9 +235,20 @@ class UnmappedConvergentTypeAudit implements SuggestsOperations
         $unmapped = [];
         $unclassified = [];
         $mappedSeen = [];
+        $unread = [];
 
         foreach ($files as $file) {
-            foreach ($this->declaredIn($file) as $method => $types) {
+            $declared = $this->declaredIn($file);
+
+            if ($declared === []) {
+                // The file names ConvergentTable and the scan read no column declaration out of it.
+                // Absorbing it silently is what made the `.covered` line vacuous; it is reported.
+                $unread[] = $file;
+
+                continue;
+            }
+
+            foreach ($declared as $method => $types) {
                 if ($types === null) {
                     $unclassified[$method][] = $file;
 
@@ -256,24 +279,34 @@ class UnmappedConvergentTypeAudit implements SuggestsOperations
         }
 
         if ($findings === []) {
+            // ⚠️ The count here is the stubs actually READ, never `count($files)`. Claiming coverage over
+            // a file the scan extracted nothing from is the vacuous pass this audit's `.unread` finding
+            // exists to make impossible.
             $findings[] = new FixableFinding(Finding::pass(
                 self::CHECK.'.covered',
                 sprintf(
-                    'Every declared column type across %d convergent stub(s) is mapped — %d distinct type(s) '.
-                    'seen, all present in ColumnTypeEquivalence. Nothing here would report `unverified`, so '.
-                    'nothing here would newly refuse under a populated-table escalation.',
-                    count($files),
+                    'Every declared column type across %d read convergent stub(s) is mapped — %d distinct '.
+                    'type(s) seen, all present in ColumnTypeEquivalence. Nothing read here would report '.
+                    '`unverified`, so nothing read here would newly refuse under a populated-table escalation.',
+                    count($files) - count($unread),
                     count($mappedSeen),
                 ),
             ));
         }
 
+        if ($unread !== []) {
+            $findings[] = $this->unreadFinding($unread, count($files));
+        }
+
         $findings[] = new FixableFinding(Finding::pass(
             self::CHECK.'.scope',
             sprintf(
-                'Scanned %d convergent stub(s) against a map covering %d declared type(s). %s',
+                'Scanned %d convergent stub(s) against a map covering %d declared type(s); %d stub(s) were '.
+                'READ (at least one declaration parsed) and %d were not. %s',
                 count($files),
                 count($this->inventory()),
+                count($files) - count($unread),
+                count($unread),
                 self::SCOPE_NOTE,
             ),
         ));
@@ -353,6 +386,52 @@ class UnmappedConvergentTypeAudit implements SuggestsOperations
     }
 
     /**
+     * Convergent files the textual scan read NO declaration out of — the audit's own unknown blind spot,
+     * enumerated instead of absorbed (beam-facade 187).
+     *
+     * The three existing findings all report something the scan *saw*. Nothing reported the files it saw
+     * nothing in, so those files were silently folded into the `.covered` line's stub count and the
+     * report read most thorough exactly where it was weakest. Two causes are live in the estate today
+     * and they want different remedies, which is why the finding names both rather than guessing:
+     *
+     * - a **declaration shape this scan cannot parse** (a Blueprint bound somewhere the regex does not
+     *   reach, columns added in a loop, a shape composed at runtime) — the remedy is 183b, which
+     *   executes the declaration;
+     * - a **file that merely mentions `ConvergentTable` in prose**, which the substring marker cannot
+     *   distinguish from a file that calls it — the remedy is nothing, and saying so is the finding.
+     *
+     * Warn, not Fail: like everything else here it is a fact about coverage, and this audit never gates.
+     *
+     * @param  list<string>  $unread
+     */
+    private function unreadFinding(array $unread, int $total): FixableFinding
+    {
+        return new FixableFinding(
+            Finding::warn(
+                self::CHECK.'.unread',
+                sprintf(
+                    '%d of %d convergent stub(s) named %s and yielded NO parsed column declaration, so no '.
+                    'coverage statement above covers them: %s. Either the declaration is shaped in a way '.
+                    'this textual scan cannot reach — which is 183b\'s half, because only executing the '.
+                    'declaration settles it — or the file only mentions %s in prose, which the substring '.
+                    'marker cannot tell apart from a call. Reported rather than absorbed: counting these '.
+                    'as covered is how a census reads thorough precisely where it is blind.',
+                    count($unread),
+                    $total,
+                    self::MARKER,
+                    implode(', ', array_map(static fn (string $f) => basename($f), array_slice($unread, 0, 6)))
+                        .(count($unread) > 6 ? sprintf(' (+%d more)', count($unread) - 6) : ''),
+                    self::MARKER,
+                ),
+            ),
+            OperationSuggestion::advisory(
+                'Open each named stub and confirm whether it declares columns at all; if it does, the shape is outside this scan and only the populated-table half (183b) can read it.',
+                'rushing/laravel-surgeon',
+            ),
+        );
+    }
+
+    /**
      * The declared types in one stub, keyed by the Blueprint method that produced them. A `null` value
      * means the method could not be classified — distinct from an empty list, which means the method
      * declares no column at all.
@@ -363,7 +442,11 @@ class UnmappedConvergentTypeAudit implements SuggestsOperations
     {
         $contents = (string) @file_get_contents($file);
 
-        if (preg_match_all('/\$table\s*->\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(/', $contents, $matches) === 0) {
+        $pattern = '/\$(?:'
+            .implode('|', array_map(static fn (string $v) => preg_quote($v, '/'), $this->blueprintVariablesIn($contents)))
+            .')\s*->\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(/';
+
+        if (preg_match_all($pattern, $contents, $matches) === 0) {
             return [];
         }
 
@@ -384,6 +467,35 @@ class UnmappedConvergentTypeAudit implements SuggestsOperations
         }
 
         return $found;
+    }
+
+    /**
+     * The variable name(s) a Blueprint is bound to in this file, so the scan is not hardcoded to
+     * `$table`.
+     *
+     * The first version of this audit matched `$table->…` literally. That is the estate's usual
+     * spelling and it is not the only one: `create_beam_ownership_edges_table.php.stub` binds the table
+     * NAME to `$table` and the Blueprint to `$t` (`->define(function (Blueprint $t) use ($table)`), so
+     * the literal scan matched nothing, `declaredIn()` returned `[]`, and the file was counted as
+     * covered without a single type being read out of it. Four estate files were in that state.
+     *
+     * `table` stays in the list unconditionally — an untyped closure (`function ($table)`) carries no
+     * `Blueprint` hint to find, and that is the shape most stubs use. Over-matching a `$table` that is
+     * a string, as in the stub above, costs nothing: `$table->…` never appears on a string.
+     *
+     * @return list<string>
+     */
+    public function blueprintVariablesIn(string $contents): array
+    {
+        $vars = [self::DEFAULT_BLUEPRINT_VAR => true];
+
+        if (preg_match_all('/\bBlueprint\s+\$([A-Za-z_][A-Za-z0-9_]*)/', $contents, $matches) !== 0) {
+            foreach ($matches[1] as $name) {
+                $vars[$name] = true;
+            }
+        }
+
+        return array_map(static fn ($v) => (string) $v, array_keys($vars));
     }
 
     /**
