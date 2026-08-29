@@ -37,6 +37,15 @@ use Rushing\Surgeon\Operation\SuggestsOperations;
  * advisory** and hands off to the rename tool by name (`surgeon:trace` / `surgeon:move`), because
  * repairing a stale FQN means locating its real home — a trace-and-move question, never one splice.
  *
+ * ⚠️ **A namespace is not a stale class-string, and it has the identical written shape.** The literal
+ * harvester matches any multi-segment backslashed string, so a config key that legitimately declares a
+ * NAMESPACE — `'sdk_namespace' => 'Splicewire\\Client\\Requests'`, which has 55 classes under it —
+ * was reported as an unresolvable FQN. That was this audit's only Fail at the flagship, so the one
+ * finding standing between a host and a green gate was the instrument asking the wrong question.
+ * A string literal is therefore excused when it names a **populated namespace directory** under one of
+ * the root's registered PSR-4 prefixes. The `::class` form is NOT excused: writing `::class` declares
+ * the author meant a class, so the motivating defect stays fully detected.
+ *
  * **The constructor takes injectable readers** — the file lister, the source reader, and the
  * existence predicate — because that is the only way to unit-test "this class does not exist"
  * without shipping a class that must not exist. Defaults are the real filesystem + the real
@@ -55,12 +64,19 @@ class ConfigClassStringAudit implements SuggestsOperations
     /** @var callable(string): bool */
     private $resolves;
 
+    /** @var callable(string): bool */
+    private $isNamespace;
+
+    /** @var array<string, list<string>>|null lazily-read PSR-4 prefix map */
+    private ?array $psr4 = null;
+
     /**
      * @param  string  $appRoot  the running host's app root (holds the config directory)
      * @param  string  $configDir  the config directory, relative to $appRoot (default `config`)
      * @param  (callable(): list<string>)|null  $configFiles  reader for the config file paths to scan (default: real `{appRoot}/{configDir}` walk)
      * @param  (callable(string): (string|false))|null  $readSource  reader for one file's source (default: real file read)
      * @param  (callable(string): bool)|null  $resolves  the existence predicate (default: the estate's class/enum/interface spelling)
+     * @param  (callable(string): bool)|null  $isNamespace  predicate for "this names a populated namespace" (default: the root's PSR-4 map)
      */
     public function __construct(
         public string $appRoot,
@@ -68,11 +84,13 @@ class ConfigClassStringAudit implements SuggestsOperations
         ?callable $configFiles = null,
         ?callable $readSource = null,
         ?callable $resolves = null,
+        ?callable $isNamespace = null,
     ) {
         $this->configFiles = $configFiles ?? fn (): array => $this->realConfigFiles();
         $this->readSource = $readSource ?? fn (string $file) => @file_get_contents($file);
         $this->resolves = $resolves
             ?? fn (string $fqn): bool => class_exists($fqn) || enum_exists($fqn) || interface_exists($fqn);
+        $this->isNamespace = $isNamespace ?? fn (string $fqn): bool => $this->namesPopulatedNamespace($fqn);
     }
 
     /** @return list<FixableFinding> */
@@ -97,6 +115,13 @@ class ConfigClassStringAudit implements SuggestsOperations
 
             foreach ($this->harvestClassStrings($source) as $reference) {
                 if (($this->resolves)($reference['fqn'])) {
+                    continue;
+                }
+
+                // A NAMESPACE has the same written shape as a class-string and never resolves to a
+                // class. Excused for the literal form only — `::class` declares the author meant a
+                // class, so a `::class` on a namespace stays a failure.
+                if ($reference['form'] === 'string literal' && ($this->isNamespace)($reference['fqn'])) {
                     continue;
                 }
 
@@ -187,6 +212,47 @@ class ConfigClassStringAudit implements SuggestsOperations
         $walk->traverse($ast);
 
         return $visitor->references;
+    }
+
+    /**
+     * Does this FQN name a namespace that actually holds code? Answered from the root's own PSR-4 map
+     * (`vendor/composer/autoload_psr4.php`) rather than from the loaded class table, because the
+     * classes under a namespace are typically never autoloaded during an audit run — asking
+     * `class_exists` about them would report "empty" for every namespace in the estate.
+     *
+     * `is_dir` follows symlinks deliberately: this estate symlinks family packages into `vendor/`, so
+     * the directory a PSR-4 prefix points at is usually a link to first-party source.
+     */
+    private function namesPopulatedNamespace(string $fqn): bool
+    {
+        $needle = trim($fqn, '\\').'\\';
+
+        foreach ($this->psr4Prefixes() as $prefix => $dirs) {
+            if (! str_starts_with($needle, $prefix)) {
+                continue;
+            }
+            $rest = str_replace('\\', '/', substr($needle, strlen($prefix)));
+            foreach ($dirs as $dir) {
+                if (is_dir(rtrim(rtrim($dir, '/').'/'.$rest, '/'))) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /** @return array<string, list<string>> the root's registered PSR-4 prefixes, read once */
+    private function psr4Prefixes(): array
+    {
+        if ($this->psr4 !== null) {
+            return $this->psr4;
+        }
+
+        $map = rtrim($this->appRoot, '/').'/vendor/composer/autoload_psr4.php';
+        $read = is_file($map) ? @include $map : null;
+
+        return $this->psr4 = is_array($read) ? $read : [];
     }
 
     /** The stable, human-legible path a finding cites — relative to the app root when under it. */
