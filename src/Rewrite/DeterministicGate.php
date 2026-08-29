@@ -134,7 +134,10 @@ class DeterministicGate
             return;
         }
 
-        $ran = array_values(array_filter($run->results, fn ($r) => ! $r->isSkipped()));
+        // `ran()` rather than `! isSkipped()`: since beam-facade 163 a stack that applied and could not
+        // execute is UNRUNNABLE rather than SKIPPED, and `! isSkipped()` would have counted it as having
+        // run — turning the one surface that already got this right into one that did not.
+        $ran = array_values(array_filter($run->results, fn ($r) => $r->ran()));
         $ran === []
             ? $result->record('cross-stack lint', 'skip', 'stacks matched but all skipped (binaries absent)')
             : $result->record('cross-stack lint', 'pass', count($ran).' stack-root check(s) clean');

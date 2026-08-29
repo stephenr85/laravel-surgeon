@@ -56,13 +56,17 @@ class PintAdapter implements LintStack
         $run = $runner->run($root, $command);
 
         if (! $run->ran) {
-            return LintResult::skipped($this->name(), $root, $run->output ?: 'pint could not run');
+            // The stack APPLIED (detect() said so) and the process would not start. Two roots in this
+            // estate are in exactly this state today with no memory condition — a `pint.json` anchors
+            // intent, `binary()` returns a bare `pint`, and there is none on PATH.
+            return LintResult::unrunnable($this->name(), $root, $run->output ?: 'pint could not run');
         }
 
-        // A crashed run (PHP fatal / OOM / uncaught) couldn't lint at all — that's an honest skip, not
-        // drift. Detect it before the verdict parse so a broken environment never reads as a violation.
+        // A crashed run (PHP fatal / OOM / uncaught) couldn't lint at all — not drift, and not a skip
+        // either. Detect it before the verdict parse so a broken environment never reads as a violation;
+        // report it as UNRUNNABLE so it never reads as a pass either (beam-facade 163).
         if ($this->crashed($run->output)) {
-            return LintResult::skipped($this->name(), $root, 'pint could not lint: '.$this->tail($run->output));
+            return LintResult::unrunnable($this->name(), $root, 'pint could not lint: '.$this->tail($run->output));
         }
 
         // Prefer Pint's structured JSON verdict when present ({"result":"passed|fail|fixed","files":[…]}).
@@ -117,7 +121,7 @@ class PintAdapter implements LintStack
         ];
     }
 
-    /** A run that emitted a PHP fatal / uncaught error couldn't lint — treated as a skip, not drift. */
+    /** A run that emitted a PHP fatal / uncaught error couldn't lint — unrunnable, neither drift nor skip. */
     private function crashed(string $output): bool
     {
         return preg_match('/PHP (Fatal error|Warning:.*memory)|Allowed memory size|Uncaught \w+Error/i', $output) === 1;

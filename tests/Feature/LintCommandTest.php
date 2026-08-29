@@ -58,11 +58,21 @@ it('writes a lint touch-manifest sidecar on --fix', function () {
     surgeon_rrmdir($root);
 });
 
+/**
+ * ⚠️ CHANGED BY beam-facade 163, and the change is the finding rather than a fixture tidy-up. This
+ * fixture gave `packages/foo` a `pint.json` and NO pint binary — so `binary()` fell back to a bare
+ * `pint`, nothing spawned, and the run checked exactly nothing while asserting exit 0. It was pinning
+ * the fold, in `--root=all-overlay`, which is the mode `rushing/laravel-surgeon/gate-reachability`
+ * ticket 01 prescribes for fleet-wide adoption. The overlay root now carries a runnable stub, so the
+ * assertion is about EXPANSION, which is what this test is for.
+ */
 it('expands --root=all-overlay to the overlay required path repos', function () {
     $root = surgeon_tmp('cmd-lint-overlay');
-    // A minimal overlay requiring one path repo that carries a pint.json.
+    // A minimal overlay requiring one path repo that carries a pint.json AND a pint that runs clean.
     surgeon_write($root.'/packages/foo/composer.json', json_encode(['name' => 'rushing/foo']));
     surgeon_write($root.'/packages/foo/pint.json', '{}');
+    surgeon_write($root.'/packages/foo/vendor/bin/pint', "#!/bin/sh\nexit 0\n");
+    chmod($root.'/packages/foo/vendor/bin/pint', 0755);
     surgeon_write($root.'/composer.json', json_encode(['name' => 'acme/app', 'require' => ['rushing/foo' => 'dev-main']]));
     surgeon_write($root.'/composer.local.json', json_encode([
         'require' => ['rushing/foo' => 'dev-main'],
@@ -71,6 +81,34 @@ it('expands --root=all-overlay to the overlay required path repos', function () 
 
     // Check-mode JSON so we can assert the overlay root was included in the discovered set.
     $this->artisan('surgeon:lint', ['--base' => $root, '--root' => ['all-overlay'], '--json' => true])
+        ->assertExitCode(Command::SUCCESS);
+
+    surgeon_rrmdir($root);
+});
+
+it('fails the check when a root whose only stack applied could not execute', function () {
+    $root = surgeon_tmp('cmd-lint-dead');
+    // A pint.json anchors intent, so the stack APPLIES; there is no vendor/bin/pint and no pint on PATH,
+    // so nothing spawns. This is the state ~/Workspaces/php/packages/splicewire/laravel-circuit-spine
+    // and .../laravel-knowledge-spine are in today — both pint-only, both previously exit 0.
+    surgeon_write($root.'/pint.json', '{}');
+
+    $this->artisan('surgeon:lint', ['--base' => $root])
+        ->expectsOutputToContain('0 of 1 applicable stack(s) ran')
+        ->expectsOutputToContain('could not execute')
+        ->assertExitCode(Command::FAILURE);
+
+    surgeon_rrmdir($root);
+});
+
+it('keeps passing a root where no stack applies at all', function () {
+    $root = surgeon_tmp('cmd-lint-nostack');
+    // No pint.json, no composer.json, no package.json: nothing applies, nothing is owed. The 8 roots in
+    // this estate in that state must stay green — "which stacks apply here" is a host question and
+    // stacksFor() already answers it correctly.
+    surgeon_write($root.'/README.md', '# nothing to lint');
+
+    $this->artisan('surgeon:lint', ['--base' => $root])
         ->assertExitCode(Command::SUCCESS);
 
     surgeon_rrmdir($root);

@@ -5,6 +5,7 @@ use Rushing\Surgeon\Lint\LintAudit;
 use Rushing\Surgeon\Lint\LintOperation;
 use Rushing\Surgeon\Lint\LintOrchestrator;
 use Rushing\Surgeon\Lint\LintResult;
+use Rushing\Surgeon\Lint\LintRun;
 use Rushing\Surgeon\Lint\LintStack;
 use Rushing\Surgeon\Lint\LintStackRegistry;
 use Rushing\Surgeon\Lint\PintAdapter;
@@ -119,13 +120,35 @@ it('maps a pint fix run to a fixed result', function () {
     surgeon_rrmdir($root);
 });
 
-it('skips a Pint run that crashed (PHP fatal / OOM) rather than reading it as drift', function () {
+// ⚠️ CHANGED BY beam-facade 163, deliberately. This assertion used to read `isSkipped()`, and that was
+// the defect being asserted: a crashed pint landed in the same enum case as "does not apply here", and
+// LintRun::clean() folded the pair into a clean verdict and exit 0. The crash is still not drift — that
+// half was always right — it is now UNRUNNABLE rather than SKIPPED.
+it('reports a Pint run that crashed (PHP fatal / OOM) as unrunnable — neither drift nor a skip', function () {
     $root = surgeon_tmp('pint-crash');
     surgeon_write($root.'/pint.json', '{}');
 
     $result = (new PintAdapter)->check($root, fake_runner(255, 'PHP Fatal error:  Allowed memory size of 134217728 bytes exhausted'));
 
-    expect($result->isSkipped())->toBeTrue();
+    expect($result->couldNotRun())->toBeTrue()
+        ->and($result->isSkipped())->toBeFalse()
+        ->and($result->hasViolations())->toBeFalse()
+        ->and($result->ran())->toBeFalse();
+
+    surgeon_rrmdir($root);
+});
+
+it('reports a pint that could not spawn as unrunnable — the two all-SKIP roots in this estate', function () {
+    $root = surgeon_tmp('pint-nospawn');
+    // A pint.json with no vendor/bin/pint: binary() falls back to a bare `pint` because "a pint.json
+    // anchors intent", and there is none on PATH. Both laravel-circuit-spine and laravel-knowledge-spine
+    // are in exactly this state, and both are pint-only.
+    surgeon_write($root.'/pint.json', '{}');
+
+    $result = (new PintAdapter)->check($root, fake_runner(0, 'could not spawn pint', ran: false));
+
+    expect($result->couldNotRun())->toBeTrue()
+        ->and($result->isSkipped())->toBeFalse();
 
     surgeon_rrmdir($root);
 });
@@ -227,7 +250,8 @@ it('leaves eslint --fix residue advisory (non-auto-fixable — the deterministic
     surgeon_rrmdir($root);
 });
 
-it('treats an eslint config/crash (exit 2) as a skip, not a fixable violation', function () {
+// ⚠️ CHANGED BY beam-facade 163 — same reason as the pint crash above. Still not a fixable violation.
+it('treats an eslint config/crash (exit 2) as unrunnable, not a fixable violation and not a skip', function () {
     $root = surgeon_tmp('eslint-crash');
     surgeon_write($root.'/package.json', '{"name":"app"}');
     surgeon_write($root.'/eslint.config.js', 'export default [];');
@@ -235,7 +259,9 @@ it('treats an eslint config/crash (exit 2) as a skip, not a fixable violation', 
 
     $result = (new EslintAdapter)->check($root, fake_runner(2, 'Cannot read config'));
 
-    expect($result->isSkipped())->toBeTrue();
+    expect($result->couldNotRun())->toBeTrue()
+        ->and($result->hasViolations())->toBeFalse()
+        ->and($result->isSkipped())->toBeFalse();
 
     surgeon_rrmdir($root);
 });
@@ -497,4 +523,87 @@ it('exposes lint as a writer operation with a stack+root suggestion payload', fu
     $suggestion = $op->suggestFor('pint', '/tmp/x');
     expect($suggestion->kind)->toBe('lint')
         ->and($suggestion->payload)->toBe(['stack' => 'pint', 'root' => '/tmp/x']);
+});
+
+// --- beam-facade 163: a SKIP must not fold into a clean verdict -----------------------------------
+
+it('refuses a clean verdict when an applicable stack could not execute', function () {
+    $run = new LintRun('check', [LintResult::unrunnable('pint', '/root', 'pint could not lint: OOM')]);
+
+    expect($run->clean())->toBeFalse()
+        ->and($run->unrunnable())->toHaveCount(1)
+        ->and($run->ran())->toHaveCount(0)
+        ->and($run->ranSummary())->toBe('0 of 1 applicable stack(s) ran');
+});
+
+it('still passes a genuine skip, because nothing was asked of it', function () {
+    $run = new LintRun('check', [LintResult::skipped('eslint', '/root', 'no eslint binary')]);
+
+    expect($run->clean())->toBeTrue()
+        // A not-applicable stack is in neither half of the ran summary.
+        ->and($run->ranSummary())->toBe('0 of 0 applicable stack(s) ran');
+});
+
+it('does not let one crashed stack hide behind its clean neighbours — the --root=all-overlay fold', function () {
+    $run = new LintRun('check', [
+        LintResult::clean('pint', '/a', 'no drift'),
+        LintResult::clean('pint', '/b', 'no drift'),
+        LintResult::unrunnable('pint', '/c', 'pint could not lint: OOM'),
+    ]);
+
+    expect($run->clean())->toBeFalse()
+        ->and($run->ranSummary())->toBe('2 of 3 applicable stack(s) ran');
+});
+
+it('warns rather than passes when the audit channel meets a stack that could not execute', function () {
+    $root = surgeon_tmp('audit-unrunnable');
+    surgeon_write($root.'/composer.json', '{"name":"acme/app"}');
+    $stack = new class implements LintStack
+    {
+        public function name(): string
+        {
+            return 'pint';
+        }
+
+        public function detect(string $root): bool
+        {
+            return true;
+        }
+
+        public function check(string $root, StackRunner $runner): LintResult
+        {
+            return LintResult::unrunnable('pint', $root, 'pint could not lint: OOM');
+        }
+
+        public function fix(string $root, StackRunner $runner): LintResult
+        {
+            return LintResult::unrunnable('pint', $root, 'pint could not lint: OOM');
+        }
+    };
+
+    $findings = (new LintAudit([$root], new LintOrchestrator(new LintStackRegistry([$stack]))))->suggestOperations();
+
+    // Warn, not Fail: severity is the RUNNER's, and this audit rides the advisory conformance channel.
+    // The same event on `surgeon:lint` check-mode — a declared gate — is a non-zero exit.
+    expect($findings[0]->finding->check)->toBe('lint.unrunnable')
+        ->and($findings[0]->finding->status->value)->toBe('warn')
+        ->and($findings[0]->finding->detail)->toContain('NOTHING was checked');
+
+    surgeon_rrmdir($root);
+});
+
+it('reports the unrunnable and ran counts in the machine-readable run', function () {
+    $run = new LintRun('check', [
+        LintResult::clean('pint', '/a'),
+        LintResult::unrunnable('eslint', '/a', 'config crash'),
+        LintResult::skipped('pint', '/b', 'not applicable'),
+    ]);
+
+    expect($run->toArray()['counts'])->toBe([
+        'results' => 3,
+        'violations' => 0,
+        'skipped' => 1,
+        'unrunnable' => 1,
+        'ran' => 1,
+    ])->and($run->toArray()['clean'])->toBeFalse();
 });

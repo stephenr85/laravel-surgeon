@@ -65,11 +65,11 @@ class EslintAdapter implements LintStack
         $run = $runner->run($root, $command);
 
         if (! $run->ran) {
-            return LintResult::skipped($this->name(), $root, $run->output ?: 'eslint could not run');
+            return LintResult::unrunnable($this->name(), $root, $run->output ?: 'eslint could not run');
         }
 
-        // eslint exits 0 = clean, 1 = lint errors present, 2 = config/crash. Treat 2 as a skip (a broken
-        // config is not drift we can fix), 1 as violations.
+        // eslint exits 0 = clean, 1 = lint errors present, 2 = config/crash. Treat 2 as UNRUNNABLE (a
+        // broken config is not drift we can fix — and it is not a pass either), 1 as violations.
         if ($run->exitCode === 0) {
             return $fix
                 ? LintResult::fixed($this->name(), $root, 0, 'eslint --fix: clean')
@@ -77,7 +77,7 @@ class EslintAdapter implements LintStack
         }
 
         if ($run->exitCode >= 2) {
-            return LintResult::skipped($this->name(), $root, 'eslint could not lint (config/crash): '.$this->tail($run->output));
+            return LintResult::unrunnable($this->name(), $root, 'eslint could not lint (config/crash): '.$this->tail($run->output));
         }
 
         // exitCode 1 — problems reported.

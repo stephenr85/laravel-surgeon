@@ -22,6 +22,15 @@ use Rushing\Surgeon\Operation\SuggestsOperations;
  *    is the deterministic pass, its residue is the agent's).
  *  - **skipped** → **Pass** with the honest skip reason (the stack didn't apply / its binary was absent) —
  *    reported, never faked into a failure, mirroring the deterministic gate's guarded stages.
+ *  - **unrunnable** → **Warn** (beam-facade 163). The stack applied and could not execute, so nothing
+ *    about that root was checked; this used to land in `skipped` and therefore in **Pass**, which meant
+ *    `surgeon:audit` — the command this estate runs most — went green *because* a linter died.
+ *
+ * ⚠️ **Warn and not Fail, and the reason is a ruling rather than a preference.**
+ * `rushing/laravel-doctor`'s `AuditError` sets it: severity belongs to the RUNNER, read off the
+ * registration's gate flag, never off whatever failed. This audit rides surgeon's advisory-by-contract
+ * conformance channel, so its ceiling is Warn. The same event on `surgeon:lint` check-mode — a declared
+ * gate — is a non-zero exit. One event, two severities, decided by who is asking.
  *
  * The subprocess is injectable (the orchestrator carries a {@see StackRunner}), so the whole result→Finding
  * mapping unit-tests with a fake runner — no real Pint/eslint needed.
@@ -52,6 +61,15 @@ class LintAudit implements SuggestsOperations
 
         foreach ($run->results as $result) {
             $where = $result->stack.' @ '.basename($result->root);
+
+            if ($result->couldNotRun()) {
+                $findings[] = new FixableFinding(Finding::warn(
+                    'lint.unrunnable',
+                    "{$where}: applied but could not execute — {$result->detail}. NOTHING was checked at this root.",
+                ));
+
+                continue;
+            }
 
             if ($result->isSkipped()) {
                 $findings[] = new FixableFinding(Finding::pass(

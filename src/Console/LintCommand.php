@@ -74,6 +74,11 @@ class LintCommand extends Command
         $this->renderDiscovery($roots, $orchestrator);
         $this->renderResults($run);
 
+        // Rendered unconditionally, clean or not: "0 of 1 applicable stack(s) ran" and "1 of 1" must be
+        // distinguishable at a glance, which was the whole of beam-facade 163. The deterministic gate has
+        // computed this since it was written (DeterministicGate::lint()); this surface never did.
+        $this->line('  <fg=gray>'.$run->ranSummary().'.</>');
+
         if ($run->clean()) {
             $this->line('  <fg=green>All applicable stacks clean.</>');
             $this->line('');
@@ -81,7 +86,19 @@ class LintCommand extends Command
             return self::SUCCESS;
         }
 
-        $this->line('  <fg=red>'.count($run->violations()).' stack-root(s) with drift.</> <fg=green>[fix: surgeon:lint --fix]</>');
+        if (($unrunnable = $run->unrunnable()) !== []) {
+            // A stack that APPLIED and did not execute is a fact about the run, not about the host — the
+            // same answer at every root, and not a thing the check's author could get wrong by not knowing
+            // where it would run. So `AGENTS.md`'s advisory-not-fatal rule does not cover it, and this
+            // declared gate fails. A root where no stack APPLIES still passes; that is a different
+            // question and stacksFor() already answers it.
+            $this->line('  <fg=red>'.count($unrunnable).' applicable stack(s) could not execute — nothing was checked there.</>');
+        }
+
+        if (($drift = $run->violations()) !== []) {
+            $this->line('  <fg=red>'.count($drift).' stack-root(s) with drift.</> <fg=green>[fix: surgeon:lint --fix]</>');
+        }
+
         $this->line('');
 
         return self::FAILURE;
@@ -138,6 +155,7 @@ class LintCommand extends Command
         foreach ($run->results as $result) {
             $where = $result->stack.' @ '.basename($result->root);
             [$tag, $line] = match (true) {
+                $result->couldNotRun() => ['<fg=red>DEAD</>', $result->detail],
                 $result->isSkipped() => ['<fg=gray>SKIP</>', $result->detail],
                 $result->hasViolations() => ['<fg=red>FAIL</>', $result->violations.' violation(s)'.($result->fixable ? '' : ' <fg=yellow>(advisory)</>')],
                 $result->fixed => ['<fg=green>FIX </>', $result->violations.' reformatted'],
