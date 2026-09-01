@@ -100,7 +100,7 @@ class DanglingInstallPathAudit implements SuggestsOperations
         $vendor = $root.'/vendor';
 
         if (! is_dir($vendor)) {
-            return [new FixableFinding(Finding::pass(
+            return [new FixableFinding(Finding::inconclusive(
                 self::CHECK.'.no-scope',
                 'No vendor/ directory in this repo — nothing is installed here to resolve.',
             ))];

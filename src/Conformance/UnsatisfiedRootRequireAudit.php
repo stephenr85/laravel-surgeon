@@ -90,7 +90,7 @@ class UnsatisfiedRootRequireAudit implements SuggestsOperations
         $base = $this->readJson($root.'/composer.json');
 
         if ($base === []) {
-            return [new FixableFinding(Finding::pass(
+            return [new FixableFinding(Finding::inconclusive(
                 self::CHECK.'.no-scope',
                 'No composer.json in this repo — no requires to check.',
             ))];
@@ -100,7 +100,7 @@ class UnsatisfiedRootRequireAudit implements SuggestsOperations
         if ($installed->packages === []) {
             // Nothing installed at all is a different state (never installed, or a package that ships no
             // vendor tree) and reporting every require as missing there would bury the real instances.
-            return [new FixableFinding(Finding::pass(
+            return [new FixableFinding(Finding::inconclusive(
                 self::CHECK.'.no-scope',
                 'No vendor/composer/installed.json in this repo — nothing has been installed here to compare the manifest against.',
             ))];

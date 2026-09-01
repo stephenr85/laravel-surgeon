@@ -104,7 +104,7 @@ class TransitiveSupplyAudit implements SuggestsOperations
         $base = $this->readJson($root.'/composer.json');
 
         if ($base === []) {
-            return [new FixableFinding(Finding::pass(
+            return [new FixableFinding(Finding::inconclusive(
                 self::CHECK.'.no-scope',
                 'No composer.json in this repo — no closure to walk.',
             ))];
@@ -116,7 +116,7 @@ class TransitiveSupplyAudit implements SuggestsOperations
 
         $index = $this->localIndex($root, $overlayFile);
         if ($index === []) {
-            return [new FixableFinding(Finding::pass(
+            return [new FixableFinding(Finding::inconclusive(
                 self::CHECK.'.no-scope',
                 sprintf(
                     'No local package checkout is reachable from this root (no type:path repository and nothing installed from a path source), so no package can be shown to be private and there is no closure to walk. %s %s',

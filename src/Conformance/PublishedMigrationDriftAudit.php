@@ -91,7 +91,7 @@ class PublishedMigrationDriftAudit implements SuggestsOperations
         $root = rtrim($this->appRoot, '/').'/'.trim($this->migrationsDir, '/');
 
         if (! is_dir($root)) {
-            return [new FixableFinding(Finding::pass(
+            return [new FixableFinding(Finding::inconclusive(
                 self::CHECK.'.no-scope',
                 "No {$this->migrationsDir} directory in this host — no published migration copies to check.",
             ))];
@@ -123,12 +123,19 @@ class PublishedMigrationDriftAudit implements SuggestsOperations
             $findings[] = $this->drifted($relative, $published, $candidates);
         }
 
+        if ($findings === [] && $checked === 0) {
+            // The directory exists but nothing in it was published by an installed package: the audit
+            // had no subject, which is not the same as finding every copy in sync.
+            return [new FixableFinding(Finding::inconclusive(
+                self::CHECK.'.none',
+                "No migration under {$this->migrationsDir} was published by an installed package — nothing to compare.",
+            ))];
+        }
+
         if ($findings === []) {
             return [new FixableFinding(Finding::pass(
                 self::CHECK.'.none',
-                $checked === 0
-                    ? "No migration under {$this->migrationsDir} was published by an installed package — nothing to compare."
-                    : "All {$checked} published migration copies under {$this->migrationsDir} match the package source they were published from.",
+                "All {$checked} published migration copies under {$this->migrationsDir} match the package source they were published from.",
             ))];
         }
 

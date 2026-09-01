@@ -101,7 +101,7 @@ class UnsatisfiedNeighbourRequireAudit implements SuggestsOperations
         $installed = InstalledPackages::fromHostRoot($root);
 
         if ($installed->packages === []) {
-            return [new FixableFinding(Finding::pass(
+            return [new FixableFinding(Finding::inconclusive(
                 self::CHECK.'.no-scope',
                 'No vendor/composer/installed.json in this repo — nothing is installed here to check.',
             ))];
@@ -109,7 +109,7 @@ class UnsatisfiedNeighbourRequireAudit implements SuggestsOperations
 
         $linked = $installed->installedFromPath();
         if ($linked === []) {
-            return [new FixableFinding(Finding::pass(
+            return [new FixableFinding(Finding::inconclusive(
                 self::CHECK.'.no-scope',
                 sprintf('None of the %d installed package(s) came from a local path source — no live neighbour to check. %s', count($installed->packages), self::SCOPE_NOTE),
             ))];

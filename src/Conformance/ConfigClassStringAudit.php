@@ -98,7 +98,7 @@ class ConfigClassStringAudit implements SuggestsOperations
     {
         $files = ($this->configFiles)();
         if ($files === []) {
-            return [new FixableFinding(Finding::pass(
+            return [new FixableFinding(Finding::inconclusive(
                 self::CHECK.'.no-scope',
                 "No config files under {$this->configDir} in this host — no class-strings to check.",
             ))];

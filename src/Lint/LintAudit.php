@@ -47,13 +47,13 @@ class LintAudit implements SuggestsOperations
     public function suggestOperations(): array
     {
         if ($this->roots === []) {
-            return [new FixableFinding(Finding::pass('lint.no-roots', 'No roots to lint.'))];
+            return [new FixableFinding(Finding::inconclusive('lint.no-roots', 'No roots to lint.'))];
         }
 
         $run = $this->orchestrator->check($this->roots);
 
         if ($run->results === []) {
-            return [new FixableFinding(Finding::pass('lint.no-stacks', 'No lint stacks apply to the given root(s).'))];
+            return [new FixableFinding(Finding::inconclusive('lint.no-stacks', 'No lint stacks apply to the given root(s).'))];
         }
 
         $op = new LintOperation;

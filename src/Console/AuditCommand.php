@@ -97,7 +97,7 @@ class AuditCommand extends Command
             .($result->gate ? ', gate' : ', advisory').')</> — '.count($result->fixables).' finding(s)');
 
         foreach ($result->fixables as $fixable) {
-            $tag = $this->statusTag($fixable->finding->status);
+            $tag = $this->statusTag($fixable->finding->status, $fixable->finding->conclusive);
             $fix = $fixable->isFixable() ? ' <fg=green>[fixable: '.$fixable->suggestion->kind.']</>' : '';
             $this->line("    {$tag} {$fixable->finding->detail}{$fix}");
 
@@ -142,8 +142,23 @@ class AuditCommand extends Command
             .($this->getOutput()->isVerbose() ? '.' : ' — re-run with <fg=cyan>-v</> for the full operation surface.'));
     }
 
-    private function statusTag(DoctorStatus $status): string
+    /**
+     * A finding that measured nothing gets its own tag rather than the status's.
+     *
+     * This sweep prints one line per finding and the tag is the only thing an operator reads at a
+     * glance, so rendering `PASS` over an audit whose population was empty is the false green
+     * {@see Finding::$conclusive} exists to end (api-surface-coherence 124/128). `[----]` matches
+     * {@see \Rushing\Doctor\DoctorRenderer}'s badge, so the two readers say the same word. Display
+     * only: the status is unchanged, nothing gates on it, and no exit code moves.
+     */
+    private function statusTag(DoctorStatus $status, bool $conclusive = true): string
     {
+        // Pass only — `[----]` over a Warn or a Fail would hide the severity. Same rule as
+        // {@see \Rushing\Doctor\DoctorRenderer::marker()}, so the two readers agree.
+        if (! $conclusive && $status === DoctorStatus::Pass) {
+            return '<fg=gray>[----]</>';
+        }
+
         return match ($status) {
             DoctorStatus::Pass => '<fg=green>PASS</>',
             DoctorStatus::Warn => '<fg=yellow>WARN</>',

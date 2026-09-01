@@ -86,7 +86,7 @@ class RequireWithoutSupplyAudit implements SuggestsOperations
         $base = $this->readJson($root.'/composer.json');
 
         if ($base === []) {
-            return [new FixableFinding(Finding::pass(
+            return [new FixableFinding(Finding::inconclusive(
                 self::CHECK.'.no-scope',
                 'No composer.json in this repo — no requires to check.',
             ))];
@@ -103,7 +103,7 @@ class RequireWithoutSupplyAudit implements SuggestsOperations
 
         $requires = $this->requires($base, $overlay);
         if ($requires === []) {
-            return [new FixableFinding(Finding::pass(
+            return [new FixableFinding(Finding::inconclusive(
                 self::CHECK.'.no-scope',
                 'No non-platform requires declared — nothing to source.',
             ))];

@@ -210,7 +210,7 @@ class UnmappedConvergentTypeAudit implements SuggestsOperations
         $files = $this->convergentFiles();
 
         if ($files === []) {
-            return [new FixableFinding(Finding::pass(
+            return [new FixableFinding(Finding::inconclusive(
                 self::CHECK.'.no-scope',
                 'No convergent migration stub is installed at this root — nothing declares a type through ConvergentTable, so the equivalence map governs nothing here.',
             ))];

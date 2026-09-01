@@ -4,6 +4,7 @@ namespace Rushing\Surgeon\Operation;
 
 use Rushing\Doctor\AuditError;
 use Rushing\Doctor\DoctorAudit;
+use Rushing\Doctor\Finding;
 use Rushing\Surgeon\Conformance\BuiltInAudits;
 use Throwable;
 
@@ -189,7 +190,20 @@ class ConformanceSweep
             return [$this->errored($class, $gate, $e, resolving: false)];
         }
 
-        return []; // an unknown shape registered in the manifest contributes nothing to the sweep
+        // A registered class that is neither a DoctorAudit nor a SuggestsOperations used to contribute
+        // NOTHING — the sweep printed no line for it at all, so a mis-registered audit read as absent
+        // rather than as unread. It is the same three-state distinction AuditError draws for an audit
+        // that threw (api-surface-coherence 128).
+        return [new FixableFinding(Finding::inconclusive(
+            'audit-unknown-shape',
+            sprintf(
+                '[%s] is registered in the conformance manifest but implements neither %s nor %s, so the '
+                .'sweep could not run it. Nothing it would have measured was measured.',
+                $class,
+                DoctorAudit::class,
+                SuggestsOperations::class,
+            ),
+        ), null)];
     }
 
     /**

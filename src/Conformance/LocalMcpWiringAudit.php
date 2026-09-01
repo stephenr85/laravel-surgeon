@@ -66,7 +66,7 @@ class LocalMcpWiringAudit implements SuggestsOperations
     {
         $registered = ($this->registeredHandles)();
         if ($registered === []) {
-            return [new FixableFinding(Finding::pass(
+            return [new FixableFinding(Finding::inconclusive(
                 'mcp-wiring.no-local-servers',
                 'No Mcp::local() servers registered in this booted host — nothing to wire.',
             ))];
@@ -74,7 +74,7 @@ class LocalMcpWiringAudit implements SuggestsOperations
 
         $wired = ($this->wiredHandles)();
         if ($wired === null) {
-            return [new FixableFinding(Finding::pass(
+            return [new FixableFinding(Finding::inconclusive(
                 'mcp-wiring.no-config',
                 "No {$this->mcpConfigPath} in this project — not using a project-scoped MCP client config, nothing to check.",
             ))];

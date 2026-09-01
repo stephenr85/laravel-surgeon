@@ -168,7 +168,7 @@ class DanglingPathRepoAudit implements SuggestsOperations
         $roots = count($visited);
 
         if ($scannedEntries === 0) {
-            $findings[] = new FixableFinding(Finding::pass(
+            $findings[] = new FixableFinding(Finding::inconclusive(
                 self::CHECK.'.no-scope',
                 $scannedFiles === 0
                     ? 'No composer config in this repo — no path repositories to check.'

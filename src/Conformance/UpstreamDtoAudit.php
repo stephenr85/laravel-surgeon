@@ -64,7 +64,7 @@ class UpstreamDtoAudit implements SuggestsOperations
     {
         $scanDir = rtrim($this->appRoot, '/').'/'.trim($this->dir, '/');
         if (! is_dir($scanDir)) {
-            return [new FixableFinding(Finding::pass(
+            return [new FixableFinding(Finding::inconclusive(
                 'upstream-dto.no-scope',
                 "No {$this->dir} directory in this host — no upstream-DTO promotion candidates to check.",
             ))];

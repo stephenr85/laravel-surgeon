@@ -174,7 +174,7 @@ class DeployPointerAudit implements SuggestsOperations
         );
 
         return $deployRemotes === []
-            ? Finding::pass(self::CHECK.'.detection-unavailable', $detail.' This root declares no deploy remote, so there is nothing here the roster would have described.')
+            ? Finding::inconclusive(self::CHECK.'.detection-unavailable', $detail.' This root declares no deploy remote, so there is nothing here the roster would have described.')
             : Finding::warn(self::CHECK.'.detection-unavailable', $detail.' This root DOES carry a deploy remote ('.implode(', ', array_keys($deployRemotes)).'), so a real deploy pointer is going unread.');
     }
 
