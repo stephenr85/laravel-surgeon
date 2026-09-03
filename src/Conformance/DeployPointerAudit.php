@@ -66,6 +66,29 @@ use Rushing\Surgeon\Operation\SuggestsOperations;
  * record and no deploy remote in its checkout) is exactly that shape and is invisible to any per-root
  * predicate.
  *
+ * ## The recorded pointer (beam-facade ticket 186) — three readings, and one that says it did not look
+ *
+ * Everything above derives the deploy pointer from `refs/remotes/<remote>/<branch>`, which is why the
+ * lag finding carries a permanent *"as of a reading taken D days ago"* hedge. A record may instead
+ * STATE the pointer — `deployed-sha:` and `deployed-at:` in its frontmatter, written by the deploy
+ * itself (`.plesk-deploy.sh`) rather than inferred from this machine's last push. When it does, the
+ * audit compares the recorded sha against the local branch and the hedge goes away, because the
+ * number no longer measures this checkout against itself. The reading is four-way, and the fourth is
+ * the one that matters most:
+ *
+ * - `.pointer-current` — the recorded sha IS the tip of the recorded branch. Pass.
+ * - `.pointer-behind` — the local branch is N commits past the recorded sha (and M behind it, if the
+ *   box carries commits this checkout does not). Warn, with `deployed-at:` beside the number.
+ * - `.pointer-unresolvable` — the record states a sha this checkout cannot resolve (never fetched, or
+ *   not a sha at all). Warn, and never `0 behind` — the same null-not-zero rule as {@see self::lag()}.
+ * - `.pointer-unrecorded` — the record states no `deployed-sha:`. Warn, saying in words that the audit
+ *   DID NOT LOOK at a recorded pointer, and the ref-derived `.lag` finding follows it, hedge intact.
+ *   Absence is a counter, not a Pass: a reading that could not distinguish "no pointer recorded" from
+ *   "pointer recorded and current" is the estate's signature defect.
+ *
+ * `deployed-sha:` is grammar the record's author could get right without knowing any host, but it is
+ * still reported rather than thrown — the audit's answer depends on which checkout reads it.
+ *
  * ## Three measured traps this implementation is built around
  *
  * - **`packed-refs` mtime is not a reading.** `audiostud` and `stephenrushing` both had one touched by
@@ -375,6 +398,31 @@ class DeployPointerAudit implements SuggestsOperations
             ));
         }
 
+        $recorded = trim((string) ($record['front']['deployed-sha'] ?? ''));
+
+        if ($recorded !== '') {
+            $findings[] = $this->recordedPointerFinding($record, $recorded, $branch, $site, $status);
+
+            return $findings;
+        }
+
+        $findings[] = new FixableFinding(
+            Finding::warn(
+                self::CHECK.'.pointer-unrecorded',
+                sprintf(
+                    'Deployment record %s states no `deployed-sha:`, so this audit did not look at a recorded '.
+                    'deploy pointer — there is none to look at. What follows is derived from this checkout\'s '.
+                    'own remote-tracking ref, and carries the reading-age hedge because of it. Have the deploy '.
+                    'write `deployed-sha:` and `deployed-at:` into the record and the hedge goes away.',
+                    $record['name'],
+                ),
+            ),
+            OperationSuggestion::advisory(
+                sprintf('Add `deployed-sha:` and `deployed-at:` to %s, written by the deploy itself.', $record['file']),
+                $record['name'],
+            ),
+        );
+
         $lag = $this->lag($remote, $branch);
 
         $findings[] = new FixableFinding(Finding::warn(
@@ -398,6 +446,120 @@ class DeployPointerAudit implements SuggestsOperations
         ));
 
         return $findings;
+    }
+
+    /**
+     * The reading against a RECORDED pointer (beam-facade 186). The number here is the local branch
+     * against the sha the deploy itself wrote, so it carries `deployed-at:` and no reading-age hedge —
+     * the hedge existed because the ref-derived number measured this checkout against itself.
+     *
+     * @param  array<string, mixed>  $record
+     */
+    private function recordedPointerFinding(array $record, string $recorded, string $branch, string $site, string $status): FixableFinding
+    {
+        $deployedAt = trim((string) ($record['front']['deployed-at'] ?? ''));
+        $stamp = $deployedAt === '' ? 'deployed-at: unstated' : 'deployed-at: '.$deployedAt;
+        $short = substr($recorded, 0, 12);
+
+        if (preg_match('/^[0-9a-f]{7,40}$/i', $recorded) !== 1) {
+            return new FixableFinding(
+                Finding::warn(
+                    self::CHECK.'.pointer-unresolvable',
+                    sprintf('Deployment record %s states `deployed-sha: %s`, which is not a git sha. The recorded pointer is UNRESOLVABLE, so no lag is reported — not zero, not the ref-derived number either.', $record['name'], $recorded),
+                ),
+                OperationSuggestion::advisory(sprintf('Correct `deployed-sha:` in %s to the deployed commit sha.', $record['file']), $record['name']),
+            );
+        }
+
+        $behind = $this->revListCount($recorded, 'refs/heads/'.$branch);
+        $ahead = $this->revListCount('refs/heads/'.$branch, $recorded);
+
+        if ($behind === null || $ahead === null) {
+            return new FixableFinding(
+                Finding::warn(
+                    self::CHECK.'.pointer-unresolvable',
+                    sprintf(
+                        'Deployment record %s states `deployed-sha: %s` (%s), and this checkout cannot resolve it '.
+                        'against refs/heads/%s — the commit was never fetched here, the branch is absent, or git '.
+                        'could not be read. The recorded pointer is UNRESOLVABLE: reported as such rather than as '.
+                        'zero behind, because this number fails toward reassurance.',
+                        $record['name'],
+                        $short,
+                        $stamp,
+                        $branch,
+                    ),
+                ),
+                OperationSuggestion::advisory(sprintf('Fetch the commit %s into this checkout (`git fetch origin`), or correct `deployed-sha:` in %s.', $short, $record['file']), $record['name']),
+            );
+        }
+
+        if ($behind === 0 && $ahead === 0) {
+            return new FixableFinding(Finding::pass(
+                self::CHECK.'.pointer-current',
+                sprintf(
+                    '%s (%s, status: %s): the recorded deploy pointer %s (%s) is the tip of %s in this checkout. '.
+                    'This is the deploy\'s own statement of what it shipped, compared against the branch — not '.
+                    'a reading of this machine\'s last push, so it carries no reading-age hedge.',
+                    $site,
+                    (string) ($record['front']['deploy-target'] ?? 'unstated target'),
+                    $status,
+                    $short,
+                    $stamp,
+                    $branch,
+                ),
+            ));
+        }
+
+        return new FixableFinding(
+            Finding::warn(
+                self::CHECK.'.pointer-behind',
+                sprintf(
+                    '%s (%s, status: %s): %s in this checkout is %d commit(s) behind the recorded deploy pointer '.
+                    '%s (%s)%s. The number is the branch against the sha the deploy itself recorded, so it needs no '.
+                    'reading-age hedge — but it is only as true as the last deploy that wrote the record.',
+                    $site,
+                    (string) ($record['front']['deploy-target'] ?? 'unstated target'),
+                    $status,
+                    $branch,
+                    $behind,
+                    $short,
+                    $stamp,
+                    $ahead > 0 ? sprintf(' — and the recorded pointer carries %d commit(s) this branch does not, so the two have diverged', $ahead) : '',
+                ),
+            ),
+            OperationSuggestion::advisory(sprintf('Deploy %s, which rewrites `deployed-sha:` in %s.', $branch, $record['file']), $record['name']),
+        );
+    }
+
+    /**
+     * `git rev-list --count <from>..<to>`, null on ANY failure. Shared by the ref-derived lag and the
+     * recorded-pointer reading; see {@see self::lag()} for why null is never coerced to zero.
+     */
+    private function revListCount(string $from, string $to): ?int
+    {
+        if (! function_exists('exec')) {
+            return null;
+        }
+
+        $root = $this->realRoot();
+
+        if (! is_dir($root.'/.git') && ! is_file($root.'/.git')) {
+            return null;
+        }
+
+        $command = sprintf(
+            'git -C %s rev-list --count %s 2>/dev/null',
+            escapeshellarg($root),
+            escapeshellarg($from.'..'.$to),
+        );
+
+        $output = [];
+        $exit = 1;
+        @exec($command, $output, $exit);
+
+        $answer = trim(implode('', $output));
+
+        return $exit === 0 && $answer !== '' && ctype_digit($answer) ? (int) $answer : null;
     }
 
     /**
@@ -439,30 +601,7 @@ class DeployPointerAudit implements SuggestsOperations
      */
     private function lag(string $remote, string $branch): ?int
     {
-        if (! function_exists('exec')) {
-            return null;
-        }
-
-        $root = $this->realRoot();
-
-        if (! is_dir($root.'/.git') && ! is_file($root.'/.git')) {
-            return null;
-        }
-
-        $command = sprintf(
-            'git -C %s rev-list --count %s..%s 2>/dev/null',
-            escapeshellarg($root),
-            escapeshellarg('refs/remotes/'.$remote.'/'.$branch),
-            escapeshellarg('refs/heads/'.$branch),
-        );
-
-        $output = [];
-        $status = 1;
-        @exec($command, $output, $status);
-
-        $answer = trim(implode('', $output));
-
-        return $status === 0 && $answer !== '' && ctype_digit($answer) ? (int) $answer : null;
+        return $this->revListCount('refs/remotes/'.$remote.'/'.$branch, 'refs/heads/'.$branch);
     }
 
     /**

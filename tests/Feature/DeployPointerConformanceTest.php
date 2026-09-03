@@ -24,11 +24,16 @@ function pointerCorpus(string $label, array $records): string
 }
 
 /** The record shape the estate actually ships: frontmatter plus a prose `Deploy remote:` bullet. */
-function pointerRecord(string $site, string $branch = 'main', ?string $remote = 'plesk', string $status = 'live', string $target = 'plesk2.frameworks.fit'): string
+function pointerRecord(string $site, string $branch = 'main', ?string $remote = 'plesk', string $status = 'live', string $target = 'plesk2.frameworks.fit', ?string $deployedSha = null, ?string $deployedAt = null): string
 {
     $remoteLine = $remote === null
         ? ''
         : "- **Deploy remote:** `{$remote}` → `{$site}@74.208.164.52:git/{$site}` (wired in the local clone).\n";
+
+    // beam-facade 186: the recorded pointer. Absent by default, because that is what every record
+    // in the estate ships today, and the audit must say so rather than read absence as current.
+    $pointer = $deployedSha === null ? '' : "deployed-sha: {$deployedSha}\n";
+    $pointer .= $deployedAt === null ? '' : "deployed-at: {$deployedAt}\n";
 
     return <<<MD
     ---
@@ -38,7 +43,7 @@ function pointerRecord(string $site, string $branch = 'main', ?string $remote = 
     system-user: {$site}
     branch: {$branch}
     status: {$status}
-    ---
+    {$pointer}---
 
     Prose body.
 
@@ -62,6 +67,47 @@ function pointerRoot(string $label, string $name, array $remotes): string
     surgeon_write($root.'/.git/config', $config);
 
     return $root;
+}
+
+/**
+ * beam-facade 186 — a real repository with three commits on `main`, a deploy remote wired, and a
+ * loose remote-tracking ref left at the FIRST commit the way a push leaves it. Returns the root and
+ * the three shas oldest-first, so a case can record any of them as the deployed pointer.
+ *
+ * @return array{root: string, parent: string, shas: list<string>}
+ */
+function pointerRepo(string $label): array
+{
+    $parent = surgeon_tmp('deploy-root-'.$label);
+    $root = $parent.'/fable';
+    mkdir($root, 0755, true);
+
+    $run = fn (string $cmd) => shell_exec('cd '.escapeshellarg($root).' && '.$cmd.' 2>/dev/null');
+
+    $run('git init -q -b main');
+    $run('git config user.email t@example.test && git config user.name t');
+
+    $shas = [];
+    foreach (['one', 'two', 'three'] as $n) {
+        file_put_contents($root.'/a.txt', $n."\n");
+        $run('git add -A && git commit -q -m '.$n);
+        $shas[] = trim((string) $run('git rev-parse HEAD'));
+    }
+
+    surgeon_write($root.'/.git/refs/remotes/plesk/main', $shas[0]."\n");
+    touch($root.'/.git/refs/remotes/plesk/main', time() - 43 * 86400);
+
+    $config = (string) file_get_contents($root.'/.git/config');
+    file_put_contents($root.'/.git/config', $config."[remote \"plesk\"]\n\turl = fable@74.208.164.52:git/fable\n");
+
+    return ['root' => $root, 'parent' => $parent, 'shas' => $shas];
+}
+
+function pointerNeedsGit(): void
+{
+    if (trim((string) shell_exec('command -v git 2>/dev/null')) === '') {
+        test()->markTestSkipped('git is not available on this machine.');
+    }
 }
 
 /** @return array<string, \Rushing\Doctor\Finding> check => finding */
@@ -303,6 +349,118 @@ it('counts real lag against a real repository, and never prints the number witho
     } finally {
         surgeon_rrmdir($corpus);
         surgeon_rrmdir($parent);
+    }
+});
+
+// ---------------------------------------------------------------------------------------------
+// beam-facade 186 — the recorded pointer. Three readings, and the fourth that says it did not look.
+// ---------------------------------------------------------------------------------------------
+
+it('186: says it DID NOT LOOK at a recorded pointer when the record states none, and keeps the ref-derived lag hedged', function () {
+    pointerNeedsGit();
+    $repo = pointerRepo('186-unrecorded');
+    $corpus = pointerCorpus('186-unrecorded', ['fable.pub' => pointerRecord('fable')]);
+
+    try {
+        $findings = pointerFindings($repo['root'], $corpus);
+
+        expect($findings)->toHaveKey(DeployPointerAudit::CHECK.'.pointer-unrecorded')
+            ->and($findings[DeployPointerAudit::CHECK.'.pointer-unrecorded']->status)->toBe(DoctorStatus::Warn)
+            ->and($findings[DeployPointerAudit::CHECK.'.pointer-unrecorded']->detail)
+            ->toContain('deployed-sha:')
+            ->toContain('did not look')
+            // The ref-derived lag stays, and stays hedged: without a recorded pointer it is all there is.
+            ->and($findings[DeployPointerAudit::CHECK.'.lag']->detail)
+            ->toContain('2 commit(s) behind plesk/main')
+            ->toContain('as of a reading taken 43 day(s) ago')
+            ->and($findings)->not->toHaveKey(DeployPointerAudit::CHECK.'.pointer-current')
+            ->not->toHaveKey(DeployPointerAudit::CHECK.'.pointer-behind');
+    } finally {
+        surgeon_rrmdir($corpus);
+        surgeon_rrmdir($repo['parent']);
+    }
+});
+
+it('186: passes when the recorded deployed-sha IS the tip of the recorded branch, with no reading-age hedge anywhere', function () {
+    pointerNeedsGit();
+    $repo = pointerRepo('186-current');
+    $corpus = pointerCorpus('186-current', ['fable.pub' => pointerRecord('fable', deployedSha: $repo['shas'][2], deployedAt: '2026-09-02T09:00:00Z')]);
+
+    try {
+        $findings = pointerFindings($repo['root'], $corpus);
+
+        expect($findings[DeployPointerAudit::CHECK.'.pointer-current']->status)->toBe(DoctorStatus::Pass)
+            ->and($findings[DeployPointerAudit::CHECK.'.pointer-current']->detail)
+            ->toContain(substr($repo['shas'][2], 0, 12))
+            ->toContain('2026-09-02T09:00:00Z')
+            ->and($findings)->not->toHaveKey(DeployPointerAudit::CHECK.'.lag')
+            ->not->toHaveKey(DeployPointerAudit::CHECK.'.pointer-unrecorded');
+
+        foreach ($findings as $finding) {
+            expect($finding->detail)->not->toContain('as of a reading taken');
+        }
+    } finally {
+        surgeon_rrmdir($corpus);
+        surgeon_rrmdir($repo['parent']);
+    }
+});
+
+it('186: warns with the lag counted from the RECORDED pointer, not the local ref, and without the hedge', function () {
+    pointerNeedsGit();
+    $repo = pointerRepo('186-behind');
+    // The ref sits at commit one (2 behind); the record says commit two was deployed (1 behind).
+    // The two disagree, and the recorded one is the deploy's own statement, so it wins.
+    $corpus = pointerCorpus('186-behind', ['fable.pub' => pointerRecord('fable', deployedSha: $repo['shas'][1], deployedAt: '2026-09-01')]);
+
+    try {
+        $findings = pointerFindings($repo['root'], $corpus);
+
+        expect($findings[DeployPointerAudit::CHECK.'.pointer-behind']->status)->toBe(DoctorStatus::Warn)
+            ->and($findings[DeployPointerAudit::CHECK.'.pointer-behind']->detail)
+            ->toContain('1 commit(s) behind')
+            ->toContain('deployed-at: 2026-09-01')
+            ->not->toContain('2 commit(s) behind')
+            ->not->toContain('as of a reading taken')
+            ->and($findings)->not->toHaveKey(DeployPointerAudit::CHECK.'.lag');
+    } finally {
+        surgeon_rrmdir($corpus);
+        surgeon_rrmdir($repo['parent']);
+    }
+});
+
+it('186: reports a recorded sha this checkout cannot resolve as UNRESOLVABLE, never as current or as zero behind', function () {
+    pointerNeedsGit();
+    $repo = pointerRepo('186-unresolvable');
+    $corpus = pointerCorpus('186-unresolvable', ['fable.pub' => pointerRecord('fable', deployedSha: str_repeat('e', 40), deployedAt: '2026-09-01')]);
+
+    try {
+        $findings = pointerFindings($repo['root'], $corpus);
+
+        expect($findings[DeployPointerAudit::CHECK.'.pointer-unresolvable']->status)->toBe(DoctorStatus::Warn)
+            ->and($findings[DeployPointerAudit::CHECK.'.pointer-unresolvable']->detail)
+            ->toContain('UNRESOLVABLE')
+            ->not->toContain('0 commit(s) behind')
+            ->and($findings)->not->toHaveKey(DeployPointerAudit::CHECK.'.pointer-current')
+            ->not->toHaveKey(DeployPointerAudit::CHECK.'.pointer-behind');
+    } finally {
+        surgeon_rrmdir($corpus);
+        surgeon_rrmdir($repo['parent']);
+    }
+});
+
+it('186: treats a malformed deployed-sha as unresolvable grammar, not as absent, so a typo cannot read as did-not-look', function () {
+    pointerNeedsGit();
+    $repo = pointerRepo('186-malformed');
+    $corpus = pointerCorpus('186-malformed', ['fable.pub' => pointerRecord('fable', deployedSha: 'not-a-sha')]);
+
+    try {
+        $findings = pointerFindings($repo['root'], $corpus);
+
+        expect($findings[DeployPointerAudit::CHECK.'.pointer-unresolvable']->detail)->toContain('not-a-sha')
+            ->and($findings)->not->toHaveKey(DeployPointerAudit::CHECK.'.pointer-unrecorded');
+    } finally {
+        surgeon_rrmdir($corpus);
+        surgeon_rrmdir($repo['parent']);
     }
 });
 
