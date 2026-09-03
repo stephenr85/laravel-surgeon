@@ -417,7 +417,12 @@ it('186: warns with the lag counted from the RECORDED pointer, not the local ref
 
         expect($findings[DeployPointerAudit::CHECK.'.pointer-behind']->status)->toBe(DoctorStatus::Warn)
             ->and($findings[DeployPointerAudit::CHECK.'.pointer-behind']->detail)
-            ->toContain('1 commit(s) behind')
+            // beam-facade 186 (writer half): the DIRECTION is asserted, not only the number — the
+            // deploy is behind the branch, never the branch behind the deploy. The first wording had it
+            // inverted and read as if main were stale, the opposite of what the finding means.
+            ->toContain('is 1 commit(s) behind main in this checkout')
+            ->toContain('the recorded deploy pointer')
+            ->not->toContain('main in this checkout is')
             ->toContain('deployed-at: 2026-09-01')
             ->not->toContain('2 commit(s) behind')
             ->not->toContain('as of a reading taken')

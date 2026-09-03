@@ -514,16 +514,16 @@ class DeployPointerAudit implements SuggestsOperations
             Finding::warn(
                 self::CHECK.'.pointer-behind',
                 sprintf(
-                    '%s (%s, status: %s): %s in this checkout is %d commit(s) behind the recorded deploy pointer '.
-                    '%s (%s)%s. The number is the branch against the sha the deploy itself recorded, so it needs no '.
+                    '%s (%s, status: %s): the recorded deploy pointer %s (%s) is %d commit(s) behind %s in this '.
+                    'checkout%s. The number is the branch against the sha the deploy itself recorded, so it needs no '.
                     'reading-age hedge — but it is only as true as the last deploy that wrote the record.',
                     $site,
                     (string) ($record['front']['deploy-target'] ?? 'unstated target'),
                     $status,
-                    $branch,
-                    $behind,
                     $short,
                     $stamp,
+                    $behind,
+                    $branch,
                     $ahead > 0 ? sprintf(' — and the recorded pointer carries %d commit(s) this branch does not, so the two have diverged', $ahead) : '',
                 ),
             ),
