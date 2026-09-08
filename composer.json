@@ -39,7 +39,7 @@
     },
     "suggest": {
         "laravel/mcp": "Ships surgeon:* as reflected MCP tools via Rushing\\Surgeon\\Mcp\\SurgeonMcpServer (auto-registered when installed).",
-        "rushing/laravel-mcp-registry": "The generic artisan-command→MCP-tool reflection bridge the surgeon MCP server mounts."
+        "rushing/laravel-mcp-registry": "The generic artisan-command\u2192MCP-tool reflection bridge the surgeon MCP server mounts."
     },
     "autoload": {
         "psr-4": {
@@ -52,6 +52,34 @@
         }
     },
     "repositories": [
+        {
+            "type": "path",
+            "url": "../laravel-doctor",
+            "options": {
+                "symlink": true
+            }
+        },
+        {
+            "type": "path",
+            "url": "../laravel-mcp-registry",
+            "options": {
+                "symlink": true
+            }
+        },
+        {
+            "type": "path",
+            "url": "../php-package-topology",
+            "options": {
+                "symlink": true
+            }
+        },
+        {
+            "type": "path",
+            "url": "../php-popcorn",
+            "options": {
+                "symlink": true
+            }
+        },
         {
             "type": "git",
             "url": "https://github.com/stephenr85/php-graphine.git"
