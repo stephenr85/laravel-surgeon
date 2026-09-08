@@ -157,7 +157,11 @@ class LintCommand extends Command
             [$tag, $line] = match (true) {
                 $result->couldNotRun() => ['<fg=red>DEAD</>', $result->detail],
                 $result->isSkipped() => ['<fg=gray>SKIP</>', $result->detail],
-                $result->hasViolations() => ['<fg=red>FAIL</>', $result->violations.' violation(s)'.($result->fixable ? '' : ' <fg=yellow>(advisory)</>')],
+                // Prefer the stack's own detail over a bare count. `pint-stubs` names the drifting
+                // `.php.stub` files there, and it has to: the whole reason that stack exists is that
+                // nothing else in the estate can see them, so a reader who is told only "7 violation(s)"
+                // has no second instrument to ask which seven (ticket 13).
+                $result->hasViolations() => ['<fg=red>FAIL</>', ($result->detail !== '' ? $result->detail : $result->violations.' violation(s)').($result->fixable ? '' : ' <fg=yellow>(advisory)</>')],
                 $result->fixed => ['<fg=green>FIX </>', $result->violations.' reformatted'],
                 default => ['<fg=green>PASS</>', 'clean'],
             };

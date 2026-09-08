@@ -40,10 +40,20 @@ class LintStackRegistry
         }
     }
 
-    /** The shipped proof-of-two: Pint (PHP) + eslint (JS). Hosts add more by registering adapters. */
+    /**
+     * The shipped defaults: Pint (PHP) + eslint (JS) — the proof-of-two — plus {@see PintStubAdapter}, the
+     * same Pint aimed at the `*.php.stub` population its own traversal cannot see. Hosts add more by
+     * registering adapters.
+     *
+     * `pint-stubs` is a separate stack rather than a widening of `pint` on purpose: it applies to a
+     * different (much smaller) set of roots, so folding it in would make `pint`'s own applies/ran counts
+     * mean two things at once — and `AGENTS.md`'s standing complaint about this estate is instruments that
+     * cannot distinguish *"nothing there"* from *"didn't look"*. Two stacks, two verdicts, and a root with
+     * stubs now reads `2 of 2 applicable stacks ran` where it used to read `1 of 1` over half its PHP.
+     */
     public static function withDefaults(): self
     {
-        return new self([new PintAdapter, new EslintAdapter]);
+        return new self([new PintAdapter, new PintStubAdapter, new EslintAdapter]);
     }
 
     public function register(LintStack $stack): self

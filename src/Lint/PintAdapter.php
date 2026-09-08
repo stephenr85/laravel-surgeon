@@ -45,14 +45,30 @@ class PintAdapter implements LintStack
         return $this->runPint($root, $runner, test: false);
     }
 
-    private function runPint(string $root, StackRunner $runner, bool $test): LintResult
+    /**
+     * The explicit file operands to hand Pint, relative to the root. Empty = no operands, i.e. Pint's own
+     * default traversal of the root.
+     *
+     * This is the seam {@see PintStubAdapter} overrides. Pint's *traversal* is what keys on `*.php`; a file
+     * named as an operand is linted whatever it is called — measured 2026-09-08, a drifting
+     * `.php.stub` named explicitly reports the identical fixer list as a `.php` copy of the same bytes,
+     * while the directory containing it reports `passed`.
+     *
+     * @return list<string>
+     */
+    protected function operands(string $root): array
+    {
+        return [];
+    }
+
+    protected function runPint(string $root, StackRunner $runner, bool $test): LintResult
     {
         $binary = $this->binary($root);
         if ($binary === null) {
             return LintResult::skipped($this->name(), $root, 'no pint binary (vendor/bin/pint or pint on PATH)');
         }
 
-        $command = $test ? [$binary, '--test'] : [$binary];
+        $command = array_merge([$binary], $test ? ['--test'] : [], $this->operands($root));
         $run = $runner->run($root, $command);
 
         if (! $run->ran) {
@@ -78,7 +94,7 @@ class PintAdapter implements LintStack
             if ($verdict !== null) {
                 return $verdict['clean']
                     ? LintResult::clean($this->name(), $root, 'pint --test: no style drift')
-                    : LintResult::violations($this->name(), $root, $verdict['count'], fixable: true, detail: $verdict['count'].' file(s) need styling');
+                    : LintResult::violations($this->name(), $root, $verdict['count'], fixable: true, detail: $this->violationDetail($verdict));
             }
 
             // Fallback: Pint --test exits non-zero when files need styling; 0 when clean.
@@ -98,11 +114,23 @@ class PintAdapter implements LintStack
     }
 
     /**
+     * The human line a check-mode drift carries. A count is enough for a whole-root Pint run (the tool's
+     * own output is right there); {@see PintStubAdapter} overrides it to name the files, because a stub
+     * drift is reported at a root nobody is looking at about a file that fails somewhere else entirely.
+     *
+     * @param  array{clean: bool, count: int, paths: list<string>}  $verdict
+     */
+    protected function violationDetail(array $verdict): string
+    {
+        return $verdict['count'].' file(s) need styling';
+    }
+
+    /**
      * Parse Pint's structured JSON verdict, if the output is that shape.
      *
-     * @return array{clean: bool, count: int}|null null when the output isn't Pint's JSON
+     * @return array{clean: bool, count: int, paths: list<string>}|null null when the output isn't Pint's JSON
      */
-    private function parseJson(string $output): ?array
+    protected function parseJson(string $output): ?array
     {
         $trimmed = trim($output);
         if (! str_starts_with($trimmed, '{')) {
@@ -113,11 +141,19 @@ class PintAdapter implements LintStack
             return null;
         }
 
-        $count = is_array($data['files'] ?? null) ? count($data['files']) : 0;
+        $files = is_array($data['files'] ?? null) ? $data['files'] : [];
+
+        $paths = [];
+        foreach ($files as $file) {
+            if (is_array($file) && is_string($file['path'] ?? null)) {
+                $paths[] = $file['path'];
+            }
+        }
 
         return [
             'clean' => $data['result'] === 'passed',
-            'count' => $count,
+            'count' => count($files),
+            'paths' => $paths,
         ];
     }
 
@@ -128,7 +164,7 @@ class PintAdapter implements LintStack
     }
 
     /** Prefer the root's pinned binary; else a bare `pint` (resolved at run time by the runner). */
-    private function binary(string $root): ?string
+    protected function binary(string $root): ?string
     {
         $vendor = rtrim($root, '/').'/vendor/bin/pint';
         if (is_file($vendor)) {

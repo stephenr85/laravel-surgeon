@@ -326,10 +326,13 @@ it('force-adds a stack the sniff missed', function () {
     surgeon_rrmdir($root);
 });
 
-it('ships Pint + eslint as the default proof-of-two', function () {
+it('ships Pint + eslint as the default proof-of-two, plus pint-stubs for the population pint cannot traverse', function () {
     $names = array_map(fn ($s) => $s->name(), LintStackRegistry::withDefaults()->all());
 
-    expect($names)->toBe(['pint', 'eslint']);
+    // `pint-stubs` is deliberately a third stack rather than a widening of `pint`: it applies to a
+    // different, much smaller set of roots, and folding it in would make `pint`'s applies/ran counts
+    // mean two things at once. See PintStubLintTest for what it is and why (ticket 13).
+    expect($names)->toBe(['pint', 'pint-stubs', 'eslint']);
 });
 
 // --- LintOrchestrator (check vs fix, discovery, root dedupe) ---------------------------------------
