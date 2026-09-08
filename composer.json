@@ -81,6 +81,13 @@
             }
         },
         {
+            "type": "path",
+            "url": "../php-graphine",
+            "options": {
+                "symlink": true
+            }
+        },
+        {
             "type": "git",
             "url": "https://github.com/stephenr85/php-graphine.git"
         },
