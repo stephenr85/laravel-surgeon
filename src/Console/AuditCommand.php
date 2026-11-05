@@ -21,7 +21,8 @@ use Rushing\Surgeon\Operation\ConformanceSweep;
  *     stale-downstream-duplicate, ticket 15) ALONGSIDE the host registrations, scoped to the running
  *     host's app root (`base_path()`) — they're surgeon-native, so they ride a parallel channel, not the
  *     host's manifest;
- *  3. dedupes registrations by audit class-string and runs each audit ({@see ConformanceSweep});
+ *  3. dedupes registrations by audit class-string (plus constructor arguments, when a registration
+ *     carries them) and runs each audit ({@see ConformanceSweep});
  *  4. collects `Finding`s + paired `OperationSuggestion`s and reports the fixable subset.
  *
  * The **agent-nomination footer** (decision 7): one line by default (fixable count + the `surgeon:*`
@@ -50,7 +51,9 @@ class AuditCommand extends Command
         }
 
         $builtIn = (new BuiltInAudits($this->laravel->basePath()))->audits();
-        $report = (new ConformanceSweep(fn (string $audit) => $this->laravel->make($audit)))->run($manifest, $builtIn);
+        $report = (new ConformanceSweep(
+            fn (string $audit, array $with = []) => $this->laravel->make($audit, $with),
+        ))->run($manifest, $builtIn);
 
         if ($this->option('json')) {
             $this->line((string) json_encode($report->toArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));

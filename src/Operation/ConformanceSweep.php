@@ -16,7 +16,9 @@ use Throwable;
  *
  * Two invariants from ticket 07:
  *  - **Dedupe by audit class-string** (decision 6): many packages require the same foundation, so the
- *    same audit surfaces N times in the merged manifest — it runs exactly once.
+ *    same audit surfaces N times in the merged manifest — it runs exactly once. A registration that
+ *    carries constructor arguments (`DoctorRegistration::$with`, make-surface 04) is one subject of a
+ *    shared audit class, so its identity is the class plus those arguments, and the resolver receives them.
  *  - **Two channels, one vocabulary** (decisions 3–5): an audit implementing {@see SuggestsOperations}
  *    exposes the paired fix channel; a plain {@see DoctorAudit} exposes only findings, wrapped with a
  *    null suggestion. An audit implementing both prefers the richer paired channel (which already carries
@@ -76,7 +78,12 @@ class ConformanceSweep
      */
     public const CHECK_ERRORED = AuditError::CHECK;
 
-    /** @param callable(class-string): object $resolver resolves an audit class-string to an instance */
+    /**
+     * The resolver turns an audit class-string, with its registration's constructor arguments, into an
+     * instance: the container's `make($audit, $with)` in {@see \Rushing\Surgeon\Console\AuditCommand}.
+     *
+     * @param  callable(class-string, array<string, mixed>): object  $resolver
+     */
     public function __construct(
         private $resolver,
     ) {}
@@ -88,6 +95,7 @@ class ConformanceSweep
     public function run(ConformanceManifest $manifest, array $builtIn = []): ConformanceReport
     {
         $seen = [];
+        $builtInClasses = [];
         $results = [];
         $optedIn = $this->gateOptIns($manifest);
 
@@ -99,6 +107,7 @@ class ConformanceSweep
                 continue;
             }
             $seen[$class] = true;
+            $builtInClasses[$class] = true;
 
             // Advisory by contract (ticket 88), not by omission — see the class docblock. A host that
             // registered this same class in its own manifest as a gate opts INTO the exit code here.
@@ -113,13 +122,22 @@ class ConformanceSweep
         }
 
         foreach ($manifest->registrations() as $registration) {
-            if (isset($seen[$registration->audit])) {
-                continue; // dedupe by audit class-string — the same class runs once (decision 6)
+            // A registration may carry its audit's constructor arguments (rushing/laravel-doctor
+            // DoctorRegistration::$with, make-surface 04): one audit class registered once per subject.
+            // Those are different audits, so the dedupe identity is the class AND its arguments; with
+            // none it is the class alone, exactly as before. `??` keeps an older doctor working.
+            $with = $registration->with ?? [];
+            $identity = $with === [] ? $registration->audit : $registration->audit.'#'.json_encode($with);
+
+            // A built-in already ran under its class-string, whatever arguments a host registration names:
+            // the registration carries the gate flag only (ticket 88, see gateOptIns()).
+            if (isset($seen[$identity]) || isset($builtInClasses[$registration->audit])) {
+                continue; // dedupe by audit identity — the same audit runs once (decision 6)
             }
-            $seen[$registration->audit] = true;
+            $seen[$identity] = true;
 
             try {
-                $audit = ($this->resolver)($registration->audit);
+                $audit = ($this->resolver)($registration->audit, $with);
             } catch (Throwable $e) {
                 // A registration naming a class that no longer exists (or whose constructor throws) fails
                 // before the audit runs at all — the same event one phase earlier, reported the same way.

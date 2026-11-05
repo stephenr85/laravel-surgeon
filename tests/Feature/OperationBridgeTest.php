@@ -13,6 +13,7 @@ use Rushing\Surgeon\Operation\OperationSuggestion;
 use Rushing\Surgeon\Operation\RelocationOperation;
 use Rushing\Surgeon\Rewrite\RewritePlan;
 use Rushing\Surgeon\Tests\Fixtures\Operations\PlainAudit;
+use Rushing\Surgeon\Tests\Fixtures\Operations\SubjectAudit;
 use Rushing\Surgeon\Tests\Fixtures\Operations\SuggestingAudit;
 use Rushing\Surgeon\Tests\Fixtures\Operations\ThrowingAudit;
 use Rushing\Surgeon\Tests\Fixtures\Operations\ThrowingSuggestingAudit;
@@ -71,6 +72,42 @@ it('dedupes registrations by audit class-string — the same audit runs once', f
 
     expect($report->auditCount())->toBe(1)
         ->and($report->findingCount())->toBe(3);
+});
+
+it('runs one audit class once per subject when its registrations carry different constructor arguments', function () {
+    // make-surface 04: DoctorRegistration::$with. Before it, the dedupe kept only the first registration
+    // of the class, and the resolver built it with no arguments, so it could not run at all.
+    $report = (new ConformanceSweep(fn (string $class, array $with = []) => new $class(...$with)))->run(manifestOf([
+        new DoctorRegistration('one', SubjectAudit::class, with: ['subject' => 'one']),
+        new DoctorRegistration('two', SubjectAudit::class, with: ['subject' => 'two']),
+        new DoctorRegistration('two-again', SubjectAudit::class, with: ['subject' => 'two']), // a true duplicate
+    ]));
+
+    expect($report->auditCount())->toBe(2)
+        ->and(array_map(fn ($result): string => $result->package, $report->results))->toBe(['one', 'two'])
+        ->and(array_map(fn (FixableFinding $f): string => $f->finding->check, $report->all()))
+        ->toBe(['subject (one)', 'subject (two)']);
+});
+
+it('still runs a built-in once when the host registers its class with constructor arguments', function () {
+    // The built-in's class-string claims the dedupe set (ticket 15), and an opt-in carries the gate flag
+    // only (ticket 88). Arguments on the registration must not turn it into a second run.
+    $resolved = [];
+    $sweep = new ConformanceSweep(function (string $class, array $with = []) use (&$resolved) {
+        $resolved[] = $class;
+
+        return new $class(...$with);
+    });
+
+    $report = $sweep->run(
+        manifestOf([new DoctorRegistration('host', PlainAudit::class, gate: true, with: ['appRoot' => '/tmp/root'])]),
+        [new PlainAudit],
+    );
+
+    expect($resolved)->toBe([])
+        ->and($report->auditCount())->toBe(1)
+        ->and($report->results[0]->package)->toBe('rushing/laravel-surgeon')
+        ->and($report->results[0]->gate)->toBeTrue();
 });
 
 it('turns the exit red only on a Fail from a gate registration', function () {
