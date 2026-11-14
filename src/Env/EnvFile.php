@@ -49,11 +49,17 @@ class EnvFile
         public ?string $viteMode,
         public bool $viteLocal,
         public array $keys,
+        public array $optionalKeys = [],
     ) {}
 
     public function declares(string $name): bool
     {
         return in_array($name, $this->keys, true);
+    }
+
+    public function documents(string $name): bool
+    {
+        return $this->declares($name) || in_array($name, $this->optionalKeys, true);
     }
 
     public function isDocumentation(): bool

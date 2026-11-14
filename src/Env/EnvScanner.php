@@ -6,6 +6,7 @@ use FilesystemIterator;
 use RecursiveCallbackFilterIterator;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
+use RuntimeException;
 use SplFileInfo;
 
 /**
@@ -56,7 +57,7 @@ class EnvScanner
      * them — paths relative to the root, everything sorted, so two runs over the same tree agree.
      *
      * @param  list<string>  $prune  extra directory names to skip, on top of {@see PRUNED}
-     * @return array{env: array<string, list<string>>, config: array<string, list<string>>}
+     * @return array{env: array<string, list<string>>, config: array<string, list<string>>, native: array<string, list<string>>}
      */
     public function scanTree(string $root, array $prune = []): array
     {
@@ -65,6 +66,7 @@ class EnvScanner
 
         $env = [];
         $config = [];
+        $native = [];
 
         foreach ($this->phpFiles($root, $pruned) as $absolute) {
             $source = @file_get_contents($absolute);
@@ -74,7 +76,7 @@ class EnvScanner
             }
 
             // Cheap pre-filter: most files name neither helper.
-            if (! str_contains($source, 'env') && ! str_contains($source, 'onfig')) {
+            if (! str_contains($source, 'env') && ! str_contains($source, 'onfig') && ! str_contains($source, '$_ENV')) {
                 continue;
             }
 
@@ -84,6 +86,12 @@ class EnvScanner
             foreach ($found['env'] as $name => $lines) {
                 foreach ($lines as $line) {
                     $env[$name][] = $relative.':'.$line;
+                }
+            }
+
+            foreach ($found['native'] as $name => $lines) {
+                foreach ($lines as $line) {
+                    $native[$name][] = $relative.':'.$line;
                 }
             }
 
@@ -97,6 +105,7 @@ class EnvScanner
         return [
             'env' => self::normalize($env),
             'config' => self::normalize($config),
+            'native' => self::normalize($native),
         ];
     }
 
@@ -191,21 +200,45 @@ class EnvScanner
      * `get`/`has`/`string`/… are only a config read when reached through the `Config` facade —
      * otherwise every `$collection->get('a.b')` in the estate becomes an entry.
      *
-     * @return array{env: array<string, list<int>>, config: array<string, list<int>>}
+     * @return array{env: array<string, list<int>>, config: array<string, list<int>>, native: array<string, list<int>>}
      */
     public static function scanSource(string $source): array
     {
         $tokens = @token_get_all($source);
         $env = [];
         $config = [];
+        $native = [];
 
         foreach ($tokens as $i => $token) {
+            if (is_array($token) && $token[0] === T_VARIABLE && $token[1] === '$_ENV') {
+                $open = self::nextMeaningful($tokens, $i);
+                $key = $open === null ? null : self::nextMeaningful($tokens, $open);
+                $close = $key === null ? null : self::nextMeaningful($tokens, $key);
+                $after = $close === null ? null : self::nextMeaningful($tokens, $close);
+                if ($open !== null && $tokens[$open] === '[' && $key !== null
+                    && is_array($tokens[$key]) && $tokens[$key][0] === T_CONSTANT_ENCAPSED_STRING
+                    && $close !== null && $tokens[$close] === ']' && ($after === null || $tokens[$after] !== '=')) {
+                    $literal = trim($tokens[$key][1], "'\"");
+                    if ($literal !== '') {
+                        $native[$literal][] = $token[2];
+                    }
+                }
+            }
             if (! is_array($token) || $token[0] !== T_STRING) {
                 continue;
             }
 
             $name = $token[1];
             $line = $token[2];
+
+            if ($name === 'getenv' && self::isFreeCall($tokens, $i)) {
+                $literal = self::firstStringArgument($tokens, $i);
+                if ($literal !== null) {
+                    $native[$literal][] = $line;
+                }
+
+                continue;
+            }
 
             if ($name === 'env' && self::isFreeCall($tokens, $i)) {
                 $literal = self::firstStringArgument($tokens, $i);
@@ -249,6 +282,7 @@ class EnvScanner
         return [
             'env' => self::sortLines($env),
             'config' => self::sortLines($config),
+            'native' => self::sortLines($native),
         ];
     }
 
@@ -264,7 +298,8 @@ class EnvScanner
     }
 
     /**
-     * Files under the root with any of the given extensions, pruned dirs skipped.
+     * Git-listed tracked and untracked-not-ignored files, with explicit prune names respected.
+     * Outside a worktree, walk with dependency-prefix descent pruning instead.
      *
      * The prune decision is a *descent* filter, not a post-hoc path match: `vendor/` and
      * `node_modules/` are the two largest trees in an estate, and a walk that enumerates them only to
@@ -280,6 +315,32 @@ class EnvScanner
             return [];
         }
 
+        $listed = $this->gitFiles($root);
+        if ($listed !== null) {
+            $paths = [];
+            foreach ($listed as $relative) {
+                $parts = explode('/', $relative);
+                $name = array_pop($parts);
+                if (array_intersect($parts, $prune) !== [] || ! in_array(pathinfo($name, PATHINFO_EXTENSION), $extensions, true)) {
+                    continue;
+                }
+                // Git can list symlinks and deleted index entries: neither is source to follow.
+                $absolute = $root;
+                foreach ([...$parts, $name] as $part) {
+                    $absolute .= '/'.$part;
+                    if (is_link($absolute)) {
+                        continue 2;
+                    }
+                }
+                if (is_file($absolute)) {
+                    $paths[] = $absolute;
+                }
+            }
+            sort($paths, SORT_STRING);
+
+            return array_values(array_unique($paths));
+        }
+
         $filtered = new RecursiveCallbackFilterIterator(
             new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
             static function (SplFileInfo $item) use ($prune): bool {
@@ -287,7 +348,9 @@ class EnvScanner
                     return false;
                 }
 
-                return ! ($item->isDir() && in_array($item->getFilename(), $prune, true));
+                return ! ($item->isDir() && (in_array($item->getFilename(), $prune, true)
+                    || str_starts_with($item->getFilename(), 'vendor')
+                    || str_starts_with($item->getFilename(), 'node_modules')));
             },
         );
 
@@ -303,6 +366,36 @@ class EnvScanner
         sort($paths, SORT_STRING);
 
         return $paths;
+    }
+
+    /** Git's source set, relative to the requested root; null only outside a worktree. */
+    private function gitFiles(string $root): ?array
+    {
+        [$code, $inside] = $this->git($root, ['rev-parse', '--is-inside-work-tree']);
+        if ($code !== 0 || trim($inside) !== 'true') {
+            return null;
+        }
+        [$code, $files] = $this->git($root, ['ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', '.']);
+        if ($code !== 0) {
+            throw new RuntimeException('Cannot enumerate git source files in ['.$root.']; refusing to walk ignored dependencies.');
+        }
+
+        return array_values(array_filter(explode("\0", $files), static fn (string $file): bool => $file !== ''));
+    }
+
+    /** @return array{int, string} */
+    private function git(string $root, array $args): array
+    {
+        $process = proc_open(['git', '-C', $root, ...$args], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        if (! is_resource($process)) {
+            throw new RuntimeException('Cannot start git to enumerate source in ['.$root.'].');
+        }
+        $out = (string) stream_get_contents($pipes[1]);
+        stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+
+        return [proc_close($process), $out];
     }
 
     /**

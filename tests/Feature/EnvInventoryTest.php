@@ -510,3 +510,102 @@ it('names the cache-unsafe reads in the human output', function () {
 
     surgeon_rrmdir($root);
 });
+
+it('uses the git source set for PHP and client reads while retaining explicit prune', function () {
+    $root = surgeon_tmp('env-git-source');
+    try {
+        surgeon_write($root.'/.gitignore', "vendor*\nnode_modules*\nignored.php\n");
+        surgeon_write($root.'/tracked.php', "<?php env('TRACKED');\n");
+        surgeon_write($root.'/deleted.php', "<?php env('DELETED');\n");
+        surgeon_git_init($root);
+        unlink($root.'/deleted.php');
+        surgeon_write($root.'/untracked.php', "<?php env('UNTRACKED');\n");
+        surgeon_write($root.'/ignored.php', "<?php env('IGNORED');\n");
+        surgeon_write($root.'/vendor.t23-prev/acme/A.php', "<?php env('BACKUP');\n");
+        surgeon_write($root.'/node_modules.old/a.ts', 'import.meta.env.CLIENT_BACKUP');
+        surgeon_write($root.'/resources/js/file with space.ts', 'import.meta.env.CLIENT_SOURCE');
+        surgeon_write($root.'/custom/A.php', "<?php env('PRUNED');\n");
+        $scanner = new EnvScanner;
+        expect(array_keys($scanner->scanTree($root, ['custom'])['env']))->toBe(['TRACKED', 'UNTRACKED'])
+            ->and(array_keys($scanner->scanClient($root)))->toBe(['CLIENT_SOURCE'])
+            ->and(Artisan::call('surgeon:env', ['--path' => $root, '--json' => true, '--prune' => ['custom']]))->toBe(0);
+        expect(Artisan::output())->not->toContain('BACKUP')->not->toContain('IGNORED');
+    } finally {
+        surgeon_rrmdir($root);
+    }
+});
+
+it('scans git subdirectories relative to the requested root and does not follow symlinks', function () {
+    $root = surgeon_tmp('env-git-subdir');
+    try {
+        surgeon_write($root.'/outside.php', "<?php env('OUTSIDE');\n");
+        surgeon_write($root.'/src/a.php', "<?php env('INSIDE');\n");
+        surgeon_git_init($root);
+        symlink($root.'/outside.php', $root.'/src/linked.php');
+        $scan = (new EnvScanner)->scanTree($root.'/src');
+        expect($scan['env'])->toBe(['INSIDE' => ['a.php:1']]);
+        unlink($root.'/src/linked.php');
+    } finally {
+        surgeon_rrmdir($root);
+    }
+});
+
+it('prunes vendor and node_modules prefixes outside git as well as explicit prune names', function () {
+    $root = surgeon_tmp('env-plain-source');
+    try {
+        foreach (['vendor.t23-prev', 'vendor_backup', 'node_modules.old', 'extra', 'src'] as $dir) {
+            surgeon_write($root.'/'.$dir.'/A.php', "<?php env('".strtoupper(str_replace('.', '_', $dir))."');\n");
+            surgeon_write($root.'/'.$dir.'/a.ts', 'import.meta.env.'.strtoupper(str_replace('.', '_', $dir)));
+        }
+        $scanner = new EnvScanner;
+        expect(array_keys($scanner->scanTree($root, ['extra'])['env']))->toBe(['SRC'])
+            ->and(array_keys($scanner->scanClient($root, ['extra'])))->toBe(['SRC']);
+    } finally {
+        surgeon_rrmdir($root);
+    }
+});
+
+it('treats commented example assignments as optional documentation, never runtime declarations', function () {
+    $root = surgeon_tmp('env-optional');
+    try {
+        surgeon_write($root.'/.env.example', "# DB_HOST=localhost\n# prose is not a declaration\n");
+        surgeon_write($root.'/.env', "# DB_HOST=localhost\n");
+        surgeon_write($root.'/.env.testing', "OTHER=\n");
+        surgeon_write($root.'/config/db.php', "<?php env('DB_HOST');\n");
+        $inventory = env_inventory($root);
+        $var = $inventory->variables[0];
+        expect($var->name)->toBe('DB_HOST')->and($var->documented)->toBeTrue()
+            ->and($var->optional)->toBeTrue()->and($var->set)->toBeFalse()
+            ->and($var->isUndocumented())->toBeFalse()->and($var->missingFrom)->toBe([])
+            ->and(DotenvKeys::in($root.'/.env'))->toBe([]);
+    } finally {
+        surgeon_rrmdir($root);
+    }
+});
+
+it('reports literal getenv and ENV reads in their own column without counting assignments or prose', function () {
+    $root = surgeon_tmp('env-native');
+    try {
+        surgeon_write($root.'/src/raw.php', <<<'SOURCE'
+<?php
+$a = getenv('DIRECT');
+$b = $_ENV['SUPERGLOBAL'];
+$_ENV['WRITE_ONLY'] = 'value';
+// getenv('COMMENT') and $_ENV['COMMENT']
+$this->getenv('METHOD');
+getenv($dynamic);
+SOURCE);
+        Artisan::call('surgeon:env', ['--path' => $root, '--json' => true]);
+        $json = json_decode(Artisan::output(), true);
+        $vars = array_column($json['env'], null, 'name');
+        expect(array_keys($vars))->toBe(['DIRECT', 'SUPERGLOBAL'])
+            ->and($vars['DIRECT']['sites'])->toBe([])
+            ->and($vars['DIRECT']['native_sites'])->toBe(['src/raw.php:2'])
+            ->and($vars['SUPERGLOBAL']['native_sites'])->toBe(['src/raw.php:3'])
+            ->and($json['counts']['read'])->toBe(2);
+        Artisan::call('surgeon:env', ['--path' => $root]);
+        expect(Artisan::output())->toContain('native PHP reads (getenv / $_ENV)')->toContain('DIRECT');
+    } finally {
+        surgeon_rrmdir($root);
+    }
+});

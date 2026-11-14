@@ -95,6 +95,15 @@ class EnvCommand extends Command
             outsideOnly: true,
         );
 
+        $native = array_filter($inventory->variables, fn (EnvVariable $v) => $v->nativeSites !== []);
+        if ($native !== []) {
+            $this->line('  native PHP reads (getenv / $_ENV) — bypass Laravel config');
+            foreach ($native as $variable) {
+                $this->line('    '.$variable->name.' '.implode(', ', $variable->nativeSites));
+            }
+            $this->line('');
+        }
+
         $this->renderGaps($inventory);
 
         $this->section(
