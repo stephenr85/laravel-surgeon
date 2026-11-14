@@ -7,3 +7,5 @@ composer.local.json
 .vscode/
 /.surgeon
 CLAUDE.md
+
+/.env

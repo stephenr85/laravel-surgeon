@@ -41,6 +41,8 @@ class EnvVariable
         public array $missingFrom = [],
         public bool $exposedToVite = false,
         public array $clientSites = [],
+        public array $nativeSites = [],
+        public bool $optional = false,
     ) {}
 
     /**
@@ -67,12 +69,12 @@ class EnvVariable
     /** Read anywhere — PHP or the client bundle. */
     public function isRead(): bool
     {
-        return $this->sites !== [] || $this->clientSites !== [];
+        return $this->readByPhp() || $this->clientSites !== [];
     }
 
     public function readByPhp(): bool
     {
-        return $this->sites !== [];
+        return $this->sites !== [] || $this->nativeSites !== [];
     }
 
     /** Read by code but absent from `.env.example` — undocumented configuration. */
@@ -156,12 +158,14 @@ class EnvVariable
             'status' => $this->status(),
             'read' => $this->isRead(),
             'documented' => $this->documented,
+            'optional' => $this->optional,
             'set' => $this->set,
             'consumers' => $this->consumers(),
             'declared_in' => $this->declaredIn,
             'missing_from' => $this->missingFrom,
             'sites' => $this->sites,
             'client_sites' => $this->clientSites,
+            'native_sites' => $this->nativeSites,
             'reads_outside_config' => $this->readsOutsideConfig(),
         ];
     }

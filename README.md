@@ -146,6 +146,10 @@ and folding them in without modelling that faithfully would produce a confident 
 | `--strict` | Exit non-zero on any finding — undocumented, unused, cache-unsafe, or an environment gap |
 | `--json` | Machine-readable output |
 
+Inside Git, source discovery uses tracked files plus untracked files that are not ignored, for PHP and client reads alike. Ignored `vendor.t23-prev` backups therefore stay out of the inventory. Outside Git, the directory walk skips names starting with `vendor` or `node_modules`. `--prune` adds directory names in either mode; symlinks are never followed.
+
+Commented assignments in `.env.example` (for example `# DB_HOST=`) document optional variables: they are neither undocumented nor required in every environment. They do not count as runtime declarations. Literal `getenv('NAME')` and `$_ENV['NAME']` reads have their own `native_sites` JSON column and human section because they bypass Laravel config. Simple `$_ENV` assignments are excluded; dynamic names remain outside this literal-only inventory.
+
 **Accuracy is a floor, not a census.** Only literal first arguments are read, so `env($name)` and
 `config("beam.{$domain}.path")` are invisible — everything listed is really read, but a tree that
 builds key names dynamically reads more than this can show. Guessing at an interpolated key would

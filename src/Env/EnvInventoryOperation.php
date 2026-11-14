@@ -33,7 +33,7 @@ class EnvInventoryOperation
 
         return new EnvInventory(
             root: $root,
-            variables: $this->reconcile($scanned['env'], $clientReads, $files, $vite),
+            variables: $this->reconcile($scanned['env'], $clientReads, $files, $vite, $scanned['native']),
             config: $scanned['config'],
             files: $files,
             vite: $vite,
@@ -52,7 +52,7 @@ class EnvInventoryOperation
      * @param  array<string, list<string>>  $clientReads  name => front-end sites
      * @return list<EnvVariable>
      */
-    private function reconcile(array $read, array $clientReads, EnvFileSet $files, ViteEnv $vite): array
+    private function reconcile(array $read, array $clientReads, EnvFileSet $files, ViteEnv $vite, array $native = []): array
     {
         $documentation = $files->documentation();
         $base = $files->named('.env');
@@ -60,6 +60,7 @@ class EnvInventoryOperation
 
         $names = array_values(array_unique([
             ...array_keys($read),
+            ...array_keys($native),
             ...array_keys($clientReads),
             ...$files->declaredKeys(),
         ]));
@@ -68,7 +69,7 @@ class EnvInventoryOperation
         $variables = [];
 
         foreach ($names as $name) {
-            $documented = $documentation?->declares($name) ?? false;
+            $documented = $documentation?->documents($name) ?? false;
 
             $sites = $read[$name] ?? [];
             $exposedToVite = $vite->exposes($name);
@@ -77,9 +78,11 @@ class EnvInventoryOperation
                 name: $name,
                 sites: $sites,
                 documented: $documented,
+                optional: in_array($name, $documentation?->optionalKeys ?? [], true),
+                nativeSites: $native[$name] ?? [],
                 set: $base?->declares($name) ?? false,
                 declaredIn: $files->declaring($name),
-                missingFrom: $this->missingFrom($name, $documented, $environments, $files, $exposedToVite, $sites !== []),
+                missingFrom: $this->missingFrom($name, $documented && ! in_array($name, $documentation?->optionalKeys ?? [], true), $environments, $files, $exposedToVite, $sites !== [] || ($native[$name] ?? []) !== []),
                 exposedToVite: $exposedToVite,
                 clientSites: $clientReads[$name] ?? [],
             );

@@ -158,7 +158,7 @@ class EnvFileSet
                 continue;
             }
 
-            $keys = [...$keys, ...$file->keys];
+            $keys = [...$keys, ...$file->keys, ...$file->optionalKeys];
         }
 
         $keys = array_values(array_unique($keys));
@@ -212,7 +212,7 @@ class EnvFileSet
         $keys = DotenvKeys::in($path);
 
         if ($path === $examplePath || str_ends_with($name, '.example')) {
-            return new EnvFile($path, $name, EnvFile::DOCUMENTATION, null, EnvFile::VITE_NONE, null, false, $keys);
+            return new EnvFile($path, $name, EnvFile::DOCUMENTATION, null, EnvFile::VITE_NONE, null, false, $keys, array_values(array_diff(DotenvKeys::optionalIn($path), $keys)));
         }
 
         if ($path === $basePath) {

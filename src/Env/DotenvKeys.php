@@ -52,6 +52,22 @@ class DotenvKeys
         return $names;
     }
 
+    /** Commented assignments are optional documentation only, never runtime declarations. */
+    public static function optionalIn(string $path): array
+    {
+        $contents = is_file($path) ? @file_get_contents($path) : false;
+        $names = [];
+        foreach (preg_split('/\R/', $contents === false ? '' : $contents) ?: [] as $line) {
+            if (preg_match('/^\s*#\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/', $line, $match)) {
+                $names[] = $match[1];
+            }
+        }
+        $names = array_values(array_unique($names));
+        sort($names, SORT_STRING);
+
+        return $names;
+    }
+
     /**
      * Whether the file exists at all — the difference between "declares nothing" and "there is no
      * `.env.example` in this repo", which the report states differently.
