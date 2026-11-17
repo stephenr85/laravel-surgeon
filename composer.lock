@@ -579,6 +579,57 @@
             "time": "2025-12-03T09:33:47+00:00"
         },
         {
+            "name": "galbar/jsonpath",
+            "version": "3.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/Galbar/JsonPath-PHP.git",
+                "reference": "61bfdd51729ac95413aaf64112b93b6fb3dbd786"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/Galbar/JsonPath-PHP/zipball/61bfdd51729ac95413aaf64112b93b6fb3dbd786",
+                "reference": "61bfdd51729ac95413aaf64112b93b6fb3dbd786",
+                "shasum": ""
+            },
+            "require": {
+                "php": ">=5.4"
+            },
+            "require-dev": {
+                "phpunit/phpunit": "~4.0",
+                "sami/sami": ">=3.3.0",
+                "satooshi/php-coveralls": ">=1.0.1"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "JsonPath\\": "src/Galbar/JsonPath",
+                    "Utilities\\": "src/Galbar/Utilities"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "Apache-2.0"
+            ],
+            "authors": [
+                {
+                    "name": "Alessio Linares",
+                    "email": "alessio@alessio.cc"
+                }
+            ],
+            "description": "JSONPath implementation for querying and updating JSON objects",
+            "keywords": [
+                "json",
+                "jsonpath",
+                "path"
+            ],
+            "support": {
+                "issues": "https://github.com/Galbar/JsonPath-PHP/issues",
+                "source": "https://github.com/Galbar/JsonPath-PHP/tree/3.0"
+            },
+            "time": "2023-03-05T19:47:06+00:00"
+        },
+        {
             "name": "graham-campbell/result-type",
             "version": "v1.1.4",
             "source": {
@@ -3161,20 +3212,25 @@
         {
             "name": "rushing/laravel-doctor",
             "version": "dev-main",
-            "dist": {
-                "type": "path",
-                "url": "../laravel-doctor",
-                "reference": "1657621a710a9dd5294be062df54043fcf0ae72d"
+            "source": {
+                "type": "git",
+                "url": "https://github.com/stephenr85/laravel-doctor.git",
+                "reference": "f4954f00e23f29b04e4276974bc579922da8e7be"
             },
             "require": {
+                "illuminate/console": "^11.0|^12.0|^13.0",
+                "illuminate/filesystem": "^11.0|^12.0|^13.0",
                 "illuminate/support": "^11.0|^12.0|^13.0",
                 "php": "^8.2"
             },
             "require-dev": {
                 "laravel/pint": "^1.0",
                 "orchestra/testbench": "^9.0|^10.0|^11.0",
-                "pestphp/pest": "^2.0|^3.0"
+                "pestphp/pest": "^2.0|^3.0",
+                "rushing/php-package-topology": "dev-main",
+                "wikimedia/composer-merge-plugin": "^2.1"
             },
+            "default-branch": true,
             "type": "library",
             "extra": {
                 "branch-alias": {
@@ -3183,6 +3239,11 @@
                 "laravel": {
                     "providers": [
                         "Rushing\\Doctor\\ServiceProvider"
+                    ]
+                },
+                "merge-plugin": {
+                    "include": [
+                        "composer.local.json"
                     ]
                 }
             },
@@ -3198,14 +3259,14 @@
             },
             "scripts": {
                 "test": [
-                    "vendor/bin/pest"
+                    "@php vendor/bin/pest"
                 ],
                 "pint": [
                     "@php -d memory_limit=512M vendor/bin/pint"
                 ]
             },
             "license": [
-                "proprietary"
+                "MIT"
             ],
             "authors": [
                 {
@@ -3221,10 +3282,7 @@
                 "readiness",
                 "schemastud"
             ],
-            "transport-options": {
-                "symlink": true,
-                "relative": true
-            }
+            "time": "2026-11-06T00:25:30+00:00"
         },
         {
             "name": "rushing/php-graphine",
@@ -3296,12 +3354,13 @@
         {
             "name": "rushing/php-package-topology",
             "version": "dev-main",
-            "dist": {
-                "type": "path",
-                "url": "../php-package-topology",
-                "reference": "7682d26add142a2f28aba8d7969860b25549e229"
+            "source": {
+                "type": "git",
+                "url": "https://github.com/stephenr85/php-package-topology.git",
+                "reference": "46936d35c3abbb016cf6da46330e1e60b7ddf13b"
             },
             "require": {
+                "galbar/jsonpath": "^3.0",
                 "php": "^8.3",
                 "rushing/php-graphine": "dev-main"
             },
@@ -3315,6 +3374,7 @@
                 "nikic/php-parser": "BSD-3 — the AST scanner behind graphine's SeamGuard, used by the source-import axis (sourceNeverReferences).",
                 "phpunit/phpunit": "The testing kit (AssertsPackageTopology / PackageTopologyConformance) needs a PHPUnit-providing host."
             },
+            "default-branch": true,
             "type": "library",
             "extra": {
                 "merge-plugin": {
@@ -3361,18 +3421,15 @@
                 "substrate",
                 "topology"
             ],
-            "transport-options": {
-                "symlink": true,
-                "relative": true
-            }
+            "time": "2026-09-08T12:38:53+00:00"
         },
         {
             "name": "rushing/php-popcorn",
             "version": "dev-main",
-            "dist": {
-                "type": "path",
-                "url": "../php-popcorn",
-                "reference": "6dc498ec600790c7de8d38f480d2ad1d25b8c117"
+            "source": {
+                "type": "git",
+                "url": "https://github.com/stephenr85/php-popcorn.git",
+                "reference": "011c15ca2c89d65f28970646ba61e40a16c89b0b"
             },
             "require": {
                 "php": "^8.3",
@@ -3381,8 +3438,10 @@
             "require-dev": {
                 "laravel/pint": "^1.0",
                 "pestphp/pest": "^3.0",
-                "phpstan/phpstan": "^2.2"
+                "phpstan/phpstan": "^2.2",
+                "rushing/php-package-topology": "dev-main"
             },
+            "default-branch": true,
             "type": "library",
             "extra": {
                 "package-topology": {
@@ -3413,7 +3472,7 @@
                 ]
             },
             "license": [
-                "proprietary"
+                "MIT"
             ],
             "authors": [
                 {
@@ -3429,10 +3488,7 @@
                 "registry",
                 "strategy"
             ],
-            "transport-options": {
-                "symlink": true,
-                "relative": true
-            }
+            "time": "2026-11-09T17:38:11+00:00"
         },
         {
             "name": "symfony/clock",
@@ -8782,10 +8838,10 @@
         {
             "name": "rushing/laravel-mcp-registry",
             "version": "dev-main",
-            "dist": {
-                "type": "path",
-                "url": "../laravel-mcp-registry",
-                "reference": "f74dfca247e961135b1587e87f4de592c90354ee"
+            "source": {
+                "type": "git",
+                "url": "https://github.com/stephenr85/laravel-mcp-registry.git",
+                "reference": "3e7fe028c0a83df320d94fdc543fe917e240be39"
             },
             "require": {
                 "illuminate/console": "^11.0|^12.0|^13.0",
@@ -8804,6 +8860,7 @@
             "suggest": {
                 "prism-php/prism": "Required only to use the ProvidesPrismTools trait, which bridges the server's tools to Prism tool objects for completions."
             },
+            "default-branch": true,
             "type": "library",
             "extra": {
                 "branch-alias": {
@@ -8827,7 +8884,7 @@
             },
             "scripts": {
                 "test": [
-                    "vendor/bin/pest"
+                    "@php vendor/bin/pest"
                 ],
                 "pint": [
                     "@php -d memory_limit=512M vendor/bin/pint"
@@ -8849,10 +8906,7 @@
                 "registry",
                 "tools"
             ],
-            "transport-options": {
-                "symlink": true,
-                "relative": true
-            }
+            "time": "2026-09-01T19:46:48+00:00"
         },
         {
             "name": "sebastian/cli-parser",
